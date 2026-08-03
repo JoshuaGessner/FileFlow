@@ -220,7 +220,11 @@ TEST(ReedSolomonErasures, HonoursTheCombinedBound) {
         for (std::size_t i = 0; i < 5; ++i) cw[40 + i * 3] ^= 0x7F;
         auto r = rs.Decode(cw, pos);
         // Refusing is required; silently returning wrong data is the failure that matters.
-        if (r.ok()) EXPECT_EQ(cw, clean) << "decoder claimed success but produced wrong data";
+        // Braced deliberately: EXPECT_EQ expands to an if/else, so an unbraced body here is a
+        // dangling else that GCC rejects under -Werror.
+        if (r.ok()) {
+            EXPECT_EQ(cw, clean) << "decoder claimed success but produced wrong data";
+        }
     }
 }
 

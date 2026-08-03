@@ -160,6 +160,30 @@ Result<Homography> Homography::FromCorrespondences(std::span<const Point2, 4> sr
         if (!std::isfinite(v)) return Error::kDegenerateHomography;
     }
 
+    // The matrix must be INVERTIBLE, and this check was missing.
+    //
+    // A projective transform is invertible by definition; a singular matrix is a degenerate
+    // fit, not a valid homography. Normalising m[8] to 1 and checking finiteness -- which is
+    // all this did before -- does not imply a non-zero determinant, so `FromCorrespondences`
+    // could succeed while `Inverse()` on the very same matrix failed. `ScreenDetector` then
+    // returned a Detection whose homography could not be inverted, and the tracker and every
+    // other consumer of the inverse inherited a broken contract.
+    //
+    // Found by `fuzz_screen_detect` (GitHub Actions run 30858226556, 2026-08-03) on the FIRST
+    // run the fuzz targets ever had: 5,022 executions, a 3x2-pixel image against a 24x40 grid,
+    // tripping the harness's invertibility invariant. It reproduces only where floating-point
+    // rounding puts the determinant on the far side of the tolerance -- Linux, not macOS --
+    // which is why enforcing the contract here beats chasing the arithmetic (finding F24).
+    //
+    // Checked with the same tolerance `Inverse()` uses, so the two cannot disagree.
+    const double c00 = m[4] * m[8] - m[5] * m[7];
+    const double c01 = m[5] * m[6] - m[3] * m[8];
+    const double c02 = m[3] * m[7] - m[4] * m[6];
+    const double det = m[0] * c00 + m[1] * c01 + m[2] * c02;
+    if (!std::isfinite(det) || std::fabs(det) < kSingularTolerance) {
+        return Error::kDegenerateHomography;
+    }
+
     return Homography(m);
 }
 
