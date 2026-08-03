@@ -220,6 +220,51 @@ jobs:
           python3 tools/perf_model/perf_model.py > /dev/null
           python3 tools/perf_model/perf_model.py --json | python3 -c "import json,sys; json.load(sys.stdin)"
 
+  android-build:
+    name: Android APK builds; core/ cross-compiles for arm64 (ADR-0010)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Install NDK r29
+        run: |
+          yes | sdkmanager --install "ndk;29.0.14206865" "cmake;3.22.1" >/dev/null
+      - name: Assemble
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: The APK must contain exactly one .so, arm64 only
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          SOS=$(unzip -l "$APK" | grep -oE 'lib/[^/]+/[^ ]+\.so' | sort)
+          echo "$SOS"
+          COUNT=$(echo "$SOS" | grep -c '\.so$')
+          if [ "$COUNT" != "1" ]; then
+            echo "::error::$COUNT shared libraries in the APK. ADR-0013 permits exactly one with"
+            echo "::error::c++_static — a second requires switching to c++_shared in the SAME change,"
+            echo "::error::or allocating in one .so and freeing in another corrupts the heap."
+            exit 1
+          fi
+          if ! echo "$SOS" | grep -q 'lib/arm64-v8a/libfileflow.so'; then
+            echo "::error::expected lib/arm64-v8a/libfileflow.so (ADR-0013: arm64 only)"
+            exit 1
+          fi
+          echo "one .so, arm64-v8a, as ADR-0013 requires"
+      - name: platform/android must not leak into core/
+        run: |
+          # ADR-0010 in the other direction: core/ may not depend on Android, and the Android
+          # adapters may not smuggle logic back into core/ by including their own headers there.
+          #
+          # Matches an #include specifically, not any mention. capture_source.h names
+          # platform/android/capture in a comment explaining its three implementations, which is
+          # documentation rather than a dependency — a guard that cannot tell those apart trains
+          # people to ignore it.
+          if grep -rnE '^[[:space:]]*#[[:space:]]*include.*platform/android' \
+               --include=*.cpp --include=*.h core/ harness/ sim/; then
+            echo "::error::core/, harness/ and sim/ must not #include from platform/android"
+            exit 1
+          fi
+          echo "no include leakage"
+
   docs:
     name: documentation links resolve
     runs-on: ubuntu-latest

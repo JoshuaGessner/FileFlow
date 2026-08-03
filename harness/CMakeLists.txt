@@ -17,6 +17,12 @@ set_target_properties(fileflow_harness PROPERTIES CXX_STANDARD 20 CXX_STANDARD_R
 
 # `ffreplay` — decode a recorded bundle and report the same metrics as ffsim, so replayed and
 # simulated runs are directly comparable.
-add_executable(ffreplay src/main.cpp)
-target_link_libraries(ffreplay PRIVATE fileflow_harness fileflow_core fileflow_warnings)
-set_target_properties(ffreplay PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+#
+# HOST-ONLY. The Android build links `fileflow_harness` for its CaptureWriter (ADR-0014) but has
+# no use for a command-line tool, and cross-compiling one into the APK's build tree is pure
+# waste. Gated on ANDROID rather than on a new option so it cannot be forgotten.
+if(NOT ANDROID)
+    add_executable(ffreplay src/main.cpp)
+    target_link_libraries(ffreplay PRIVATE fileflow_harness fileflow_core fileflow_warnings)
+    set_target_properties(ffreplay PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+endif()

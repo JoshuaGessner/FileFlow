@@ -33,6 +33,41 @@ transfer.
 **Open questions.** What is the correct behaviour on backgrounding — pause or abort?
 
 ## C02 — Device capability probe
+> **Status 2026-08-03: DECISION LOGIC IMPLEMENTED AND TESTED OFF-DEVICE; VERIFICATION NOT YET
+> POSSIBLE.** (`core/src/device.cpp` — `Decide()`; `platform/android/src/jni_probe.cpp`;
+> `app/src/main/kotlin/dev/fileflow/probe/`.) ADR-0014, findings F25.
+>
+> **Split per ADR-0014: Kotlin marshals, portable C++ judges.** `Decide()` is a pure function —
+> `DeviceReport` in, `DeviceProfile` out, no I/O, no clock, no camera handle — so recorded
+> characteristic sets replay as fixtures, which is what the test strategy below asks for. 19
+> desktop tests cover it, including the adversarial cases RISK-011 names.
+>
+> **Claims and measurements are separate types of thing.** `Evidence` is
+> `kUnknown | kClaimed | kVerified | kRefuted`, and the default policy **refuses to act on an
+> unverified claim**. Consequence worth stating plainly: **the probe returns `kUnsupported` on
+> every real device today**, because nothing has been verified yet. That is correct, not a bug —
+> a probe that trusts is not a probe.
+>
+> **It refuses to infer `Fd` from the refresh rate**, which is the conflation ADR-0012 exists to
+> prevent, so an unmeasured device cannot earn a tier however good its camera looks.
+>
+> **Grid selection is arithmetic and independently reproduces DEVICE-MATRIX.md**: 120×200 on the
+> Pixel 8 (9×12 px), 144×240 on the S26 Ultra (10×13 px), and neither integer on both — which is
+> *why* the grid is negotiated in the frame header. A test asserts the disagreement, so if the
+> two devices ever share a grid, that rationale gets revisited rather than silently outliving
+> its reason.
+>
+> **CORRECTION (F25): this entry's output list was wrong.** It named rolling-shutter skew among
+> the probe's outputs. `SENSOR_ROLLING_SHUTTER_SKEW` is a **`CaptureResult`** key, not a
+> `CameraCharacteristics` key `[FACT — android.jar API 35]`, so the startup probe **cannot obtain
+> it at all**; it arrives per-frame from an active capture session and must reach the profile from
+> C05 instead. OQ-017 therefore cannot be answered by capability enumeration.
+>
+> **Still outstanding:** the *verification* half. Nothing upgrades evidence to `kVerified` until
+> the measurements exist — presented-state rate (EXP-006), camera frame-rate and distinctness
+> (EXP-007), whether manual settings are actually honoured. The code is shaped so those are cheap
+> to add; it does not substitute for them.
+
 **Responsibility.** Determine what this device can actually do, and classify it into a
 supported tier. Refuse or degrade rather than fail obscurely later.
 **Inputs.** `CameraCharacteristics`, `Display.Mode` list, `INFO_SUPPORTED_HARDWARE_LEVEL`,
@@ -86,6 +121,37 @@ Round-trip against the sampler with an identity channel.
 **Open questions.** Which of the three candidate layouts (OQ-003).
 
 ## C05 — Camera capture service
+> **Status 2026-08-03: RECORDING PATH IMPLEMENTED; LIVE CAPTURE SESSION NOT STARTED.**
+> (`platform/android/src/jni_recorder.cpp`, `app/.../capture/NativeRecorder.kt`.) ADR-0014.
+>
+> **The recorder reuses `harness::CaptureWriter` rather than reimplementing the bundle format**,
+> and that is load-bearing rather than convenient: F17's proof that replay is bit-identical to
+> live decode is a proof about *that writer*. A Kotlin reimplementation would make the guarantee
+> apply to the wrong code, and the first real capture would arrive on an unproven path — losing
+> exactly the property the harness was built early to establish.
+>
+> **Row stride is carried through, never assumed equal to width.** The Y plane of `YUV_420_888`
+> is very often padded, and `CaptureWriter::WriteFrame` packs rows tightly so the driver's stride
+> never reaches the file.
+>
+> **On ADR-0003's "no per-frame data crosses JNI":** `writeFrame` passes a **direct
+> `ByteBuffer`**, so native code reads the camera's own memory and no copy occurs. A non-direct
+> buffer is **refused with an error rather than silently copied**, because a silent per-frame
+> memcpy is precisely the regression that rule exists to prevent. Buffer capacity is
+> bounds-checked against the reported stride and height before a view is constructed over it.
+>
+> **A failed frame returns an error ordinal, not an exception**: a dropped frame is normal on this
+> channel and the fountain layer is built for it, so the caller records the gap and continues.
+>
+> **Rolling-shutter skew belongs here, not in C02** (finding F25):
+> `SENSOR_ROLLING_SHUTTER_SKEW` is a `CaptureResult` key, so it arrives per-frame from an active
+> session and this component is the only one that can observe it.
+>
+> **Still outstanding, and it is the bulk of the component:** opening a `CameraCaptureSession`,
+> locking exposure/ISO/focus/AWB, verifying the requested settings actually appear in the returned
+> `CaptureResult` (RISK-011), the GPU `SurfaceTexture` path for ≥120 fps (ADR-0005), and frame
+> drop accounting. None of it is verifiable without a device.
+
 **Responsibility.** Configure the camera with locked manual settings and deliver frames
 with minimum latency and copying, over both the CPU and GPU paths.
 **Inputs.** `DeviceProfile`, capture configuration.

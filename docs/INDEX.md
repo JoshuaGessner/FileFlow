@@ -86,6 +86,7 @@ findings that would otherwise have to be rediscovered.
 | [adr/ADR-0011-reference-device-first.md](adr/ADR-0011-reference-device-first.md) | Reference-device-first |
 | [adr/ADR-0012-goodput-primary-metric.md](adr/ADR-0012-goodput-primary-metric.md) | Goodput as the metric |
 | [adr/ADR-0013-toolchain-and-build-system.md](adr/ADR-0013-toolchain-and-build-system.md) | Toolchain, build system, repo layout |
+| [adr/ADR-0014-thin-android-adapters.md](adr/ADR-0014-thin-android-adapters.md) | Thin Android adapters; all judgement in portable C++ |
 
 ## Specifications
 
@@ -103,7 +104,7 @@ findings that would otherwise have to be rediscovered.
 | [experiments/EXPERIMENT-REGISTRY.md](experiments/EXPERIMENT-REGISTRY.md) | EXP-001…EXP-023 with hypotheses and thresholds |
 | [experiments/OPEN-QUESTIONS.md](experiments/OPEN-QUESTIONS.md) | OQ-001…OQ-033 with severity and resolution path |
 | [experiments/FIRST-THREE-EXPERIMENTS.md](experiments/FIRST-THREE-EXPERIMENTS.md) | Recommended immediate work with rationale |
-| [experiments/PHASE1-FINDINGS.md](experiments/PHASE1-FINDINGS.md) | **F1–F23 — the project's memory. Design defects, one retraction (F14), and every simulated rate so far** |
+| [experiments/PHASE1-FINDINGS.md](experiments/PHASE1-FINDINGS.md) | **F1–F25 — the project's memory. Design defects, one retraction (F14), every simulated rate, and what the first real CI run and the first real SDK found** |
 
 ## Testing
 
@@ -152,6 +153,6 @@ findings that would otherwise have to be rediscovered.
 | Experiments | [experiments/EXPERIMENT-REGISTRY.md](experiments/EXPERIMENT-REGISTRY.md) | EXP-001–023 |
 | Open questions | [experiments/OPEN-QUESTIONS.md](experiments/OPEN-QUESTIONS.md) | OQ-001–037 |
 | Risks | [planning/RISK-REGISTER.md](planning/RISK-REGISTER.md) | RISK-001–025 |
-| ADRs | [adr/README.md](adr/README.md) | ADR-0001–0013 |
-| Findings | [experiments/PHASE1-FINDINGS.md](experiments/PHASE1-FINDINGS.md) | F1–F23 |
+| ADRs | [adr/README.md](adr/README.md) | ADR-0001–0014 |
+| Findings | [experiments/PHASE1-FINDINGS.md](experiments/PHASE1-FINDINGS.md) | F1–F25 |
 | Research tasks | [research/RESEARCH-PLAN.md](research/RESEARCH-PLAN.md) | RT-01–RT-08 |

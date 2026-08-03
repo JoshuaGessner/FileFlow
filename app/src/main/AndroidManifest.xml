@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The receiver needs the camera. Nothing else is requested: NG7 rules out network code of
+         any kind, including for capability exchange, so there is deliberately no INTERNET
+         permission and adding one would contradict the project's premise. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera.any" android:required="true" />
+    <!-- Manual sensor control is what locks exposure/ISO/focus for the session. Not required:
+         RISK-011 says the flag is unreliable, so the probe verifies by measurement and the app
+         degrades rather than refusing to install. -->
+    <uses-feature
+        android:name="android.hardware.camera.capability.manual_sensor"
+        android:required="false" />
+
+    <application
+        android:label="FileFlow"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

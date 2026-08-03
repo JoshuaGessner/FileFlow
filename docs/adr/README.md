@@ -39,7 +39,8 @@ wrong. Each one names the experiment that would confirm or overturn it.
 | [0010](ADR-0010-simulator-before-optimization.md) | Offline simulator before optimisation | Accepted | High | — (process) |
 | [0011](ADR-0011-reference-device-first.md) | Reference-device-first development | Accepted | High | — (scope decision) |
 | [0012](ADR-0012-goodput-primary-metric.md) | Goodput as the primary metric | Accepted | High | [CHROMACODE] evidence |
-| [0013](ADR-0013-toolchain-and-build-system.md) | Toolchain, build system and repo layout | **Proposed** | Medium-High | Phase 1 scaffolding |
+| [0013](ADR-0013-toolchain-and-build-system.md) | Toolchain, build system and repo layout | **Accepted** | High | Validated 2026-08-03: `core/` cross-compiles for arm64 under NDK r29 unchanged, one `.so`, no warnings |
+| [0014](ADR-0014-thin-android-adapters.md) | Thin Android adapters; all judgement in portable C++ | **Accepted** | Medium-High | C02 probe logic tested off-device; F25 found a platform error on the way |
 
 ## Note on confidence
 

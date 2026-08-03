@@ -935,6 +935,100 @@ citing F19 for "M0 has no errors" should read this alongside it.
 
 ---
 
+## F24 — A CI configuration that has never run is a hypothesis, not a safety net `[FACT]`
+
+**Found:** 2026-08-03, pushing the repository to GitHub for the first time. Seven CI jobs had
+been written, committed and cited in ADR-0013 as validation. **None had ever executed.** Their
+first run failed four jobs and exposed **four independent defects**, one of them a genuine bug on
+the attacker-facing surface.
+
+That is the finding. The individual defects are below, but the lesson is the aggregate: an
+unexecuted CI file is a *claim* about the code, and this project had been treating it as
+*evidence* for a day. ADR-0013's "validated by Phase 1 scaffolding" was true only of the macOS
+developer machine.
+
+### 24a — `fuzz_screen_detect` crashed after 5,022 executions
+
+The fuzz targets' first real run found a **contract violation in the homography solver**.
+`Homography::FromCorrespondences` normalised `m[8]` to 1 and checked finiteness — neither of
+which implies a non-zero determinant — so it could return a **singular matrix that `Inverse()`
+then rejected**. `ScreenDetector` handed back a `Detection` whose homography could not be
+inverted, and the tracker and every other consumer of the inverse inherited a broken contract.
+
+Fixed at the contract level: a projective transform is invertible by definition, so
+`FromCorrespondences` now checks the determinant with the same tolerance `Inverse()` uses, and
+the two cannot disagree. Behaviour on valid input is unchanged — zero detection failures, same
+worst geometric error, everything still verifies.
+
+**It reproduces only on Linux.** The crashing input is a 3×2-pixel image against a 24×40 grid;
+whether its determinant lands inside the tolerance depends on floating-point rounding. Chasing
+the arithmetic would have been the wrong fix.
+
+### 24b — GCC rejected the build where clang does not
+
+`-Wmissing-field-initializers` (enabled by `-Wextra`) fires under GCC on **every C++20 designated
+initializer that omits a member** — `{.pilot_pitch = 8, .marker_size = 4}` and friends, used
+throughout. Omitting a member is the point of the feature, and in C++ it cannot indicate an
+uninitialised read: aggregate initialisation value-initialises anything not named. Suppressed
+with that rationale rather than dropping `-Werror` or naming every field at every call site. One
+genuine `-Wdangling-else` (an unbraced `if (cond) EXPECT_EQ(...)`, where the macro expands to an
+`if/else`) fixed with braces. Two integer-promotion narrowings in `core/` made explicit.
+
+### 24c — The determinism gate could never have passed
+
+ENGINEERING-PRACTICES calls "same seed ⇒ byte-identical output" the foundation of simulator and
+replay regression testing. The gate compared `ffsim`'s **full stdout**, which includes decoder
+throughput and real-time headroom — wall-clock measurements of the host. Two runs cannot produce
+identical text. **The gate was arithmetically impossible to satisfy from the day it was written.**
+
+`ffsim --no-host-metrics` now suppresses exactly the three host-dependent lines, so the tool
+declares which of its output is reproducible instead of leaving a filter in YAML to drift. The
+gate additionally now checks the **image path**, which renders pixels and exercises far more
+floating point than the cell-sample path — where the hazard actually lives. Both are
+deterministic, which is the first time that has been demonstrated rather than assumed.
+
+### 24d — Local fuzzing and local GCC are both unavailable
+
+A corollary worth stating because it shapes how this project must work. F5 recorded that Apple
+clang ships no libFuzzer. To that add: **no GCC is available on this machine either**, so the
+`-Wconversion` class of defect is *also* Linux-CI-only. Two of the four defects above were
+undetectable locally by construction.
+
+**Consequence:** every fuzzer crash now gets a permanent deterministic replay in
+`core/tests/test_fuzz_regressions.cpp`, including the property behind it rather than only the one
+input that exposed it. A macOS developer cannot run the fuzzer, but they can run the regression.
+
+---
+
+## F25 — `SENSOR_ROLLING_SHUTTER_SKEW` is not a camera characteristic `[FACT]`
+
+**Found:** 2026-08-03, writing the capability probe's Kotlin layer against the real SDK.
+
+`SENSOR_ROLLING_SHUTTER_SKEW` is a **`CaptureResult`** key, not a `CameraCharacteristics` key.
+Verified directly against `android.jar` (API 35): `CameraCharacteristics` has no such member;
+`CaptureResult` has `Key<Long> SENSOR_ROLLING_SHUTTER_SKEW`.
+
+**Why it matters.** `docs/research/android-camera-pipeline.md` and OQ-017 both read as though it
+could be read at startup, and C02's registry entry lists rolling-shutter skew among the things
+the probe outputs. **A startup probe cannot obtain it at all** — it arrives per-frame from an
+active capture session. So:
+
+- The probe leaves it at its negative sentinel rather than defaulting to a plausible number.
+- Skew must reach `DeviceReport` from the **recorder**, not the probe, which changes where
+  OQ-017 gets answered: not by capability enumeration, but by a capture run.
+- C02's specified output list was wrong on this point, and is corrected.
+
+**The generalisable part.** This is the ADR-0014 payoff running in the *opposite* direction to
+the one intended. That ADR argued for putting judgement in portable C++ because Kotlin cannot be
+tested off-device. But writing the thin Kotlin layer against the real SDK is itself a test — of
+the documentation — and it caught a platform misunderstanding the research notes had recorded as
+settled. **Every platform claim in this repository is documentation-derived (`[FACT]`-from-docs)
+and one of the first to meet a compiler was wrong.** That is a specific, measured reason to
+distrust the rest until they compile or run, and it argues for getting the remaining platform
+claims in front of a toolchain early rather than treating the research phase as finished.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

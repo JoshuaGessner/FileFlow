@@ -61,7 +61,7 @@ whenever a document is added or materially changed (CONTRIBUTING.md).
 | **Experiments** | | | | | | | |
 | `experiments/EXPERIMENT-REGISTRY.md` | EXP-001–023 | Research | Draft — EXP-023 run; EXP-001 answered only as a null result (F16) | 2026-08-03 | all ADRs | — | `data/experiments/` |
 | `experiments/OPEN-QUESTIONS.md` | OQ-001–037 | Project lead | Draft | 2026-08-03 | all ADRs | all | — |
-| `experiments/PHASE1-FINDINGS.md` | **F1–F23 — the project's memory.** Design defects, one retraction (F14), every simulated rate so far | Architecture | Current | 2026-08-03 | ADR-0006, 0009, 0013 | EXP-001, 023 | `core/`, `sim/`, `harness/` |
+| `experiments/PHASE1-FINDINGS.md` | **F1–F25 — the project's memory.** Design defects, one retraction (F14), every simulated rate, plus what the first CI run and the first SDK contact found | Architecture | Current | 2026-08-03 | ADR-0006, 0009, 0013 | EXP-001, 023 | `core/`, `sim/`, `harness/` |
 | `experiments/FIRST-THREE-EXPERIMENTS.md` | Immediate work | Project lead | Draft | 2026-08-02 | ADR-0005, 0004, 0008 | EXP-007, 006, 010 | — |
 | **Testing** | | | | | | | |
 | `testing/SIMULATOR-PLAN.md` | Simulator design | Testing | Draft | 2026-08-02 | ADR-0010 | EXP-010, 011, 012 | C16 |

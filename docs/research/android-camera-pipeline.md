@@ -128,7 +128,24 @@ top rows show state *k*, the bottom rows state *k+1*, with a transition band bet
 
 `SENSOR_ROLLING_SHUTTER_SKEW` reports the time delta between first and last row exposure
 where available. `[FACT]` This is the key parameter for the mixed-frame model and for
-M4. The transition band's position moves frame to frame as the two clocks drift, which is
+M4.
+
+> **Corrected 2026-08-03 (finding F25).** It is a **`CaptureResult`** key, **not** a
+> `CameraCharacteristics` key. Verified against `android.jar` API 35: `CameraCharacteristics` has
+> no such member; `CaptureResult` declares `Key<Long> SENSOR_ROLLING_SHUTTER_SKEW`.
+>
+> The paragraph above did not say otherwise, but everything around it invited the wrong reading,
+> and C02's registry entry did make the mistake — it listed rolling-shutter skew among the
+> capability probe's outputs. **A startup probe cannot obtain this value at all.** It arrives
+> per-frame from an active capture session, so:
+>
+> - the probe leaves it unset rather than defaulting to a plausible number;
+> - it reaches `DeviceReport` from the **recorder**, not the probe;
+> - **OQ-017 cannot be answered by capability enumeration** — it needs a capture run, which
+>   makes it an EXP-007/EXP-008 question and not a probe question.
+>
+> Caught by writing the Kotlin against the real SDK, which is the first time any of this
+> document's platform claims met a compiler. The transition band's position moves frame to frame as the two clocks drift, which is
 also what makes it *exploitable*: it sweeps, so over many frames every screen region is
 eventually sampled cleanly.
 
@@ -139,7 +156,7 @@ eventually sampled cleanly.
 | OQ-001 | On our reference devices, what is the maximum frame rate at which CPU-accessible `YUV_420_888` is actually delivered without drops, at a resolution sufficient to resolve our densest grid? |
 | OQ-002 | Does the GPU-texture path in a high-speed session deliver genuinely distinct frames at 120 fps, or does the vendor pipeline duplicate/interpolate? |
 | OQ-016 | Do vendor `EDGE_MODE`/`NOISE_REDUCTION_MODE` settings actually take effect, or are they silently ignored? |
-| OQ-017 | Is `SENSOR_ROLLING_SHUTTER_SKEW` reported, and is it accurate? |
+| OQ-017 | Is `SENSOR_ROLLING_SHUTTER_SKEW` reported, and is it accurate? **Note (F25): it is a `CaptureResult` key, so this cannot be answered by the startup probe — it needs an active capture session.** |
 
 ## Sources
 

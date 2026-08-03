@@ -20,7 +20,7 @@ Read these first, in order:
 
 1. `docs/INDEX.md` — the map of all 53 documents
 2. `docs/vision/PERFORMANCE-PHILOSOPHY.md` — the metric discipline, non-negotiable
-3. `docs/experiments/PHASE1-FINDINGS.md` — **23 findings; this is the project's memory**
+3. `docs/experiments/PHASE1-FINDINGS.md` — **25 findings; this is the project's memory**
 4. `CONTRIBUTING.md` — evidence tags and the rules below
 5. `docs/architecture/COMPONENT-REGISTRY.md` — component status, C01–C20
 
@@ -141,16 +141,39 @@ Full detail in `docs/experiments/PHASE1-FINDINGS.md`. The ones that change how y
 
 ## The single most important constraint
 
-**No Android code exists yet.** Everything is portable C++ running on desktop. The project has
-reached the point where progress is gated on **real captures**, not on more simulation.
+**No measurement on real hardware exists.** The Android project now exists and builds — that
+changed on 2026-08-03 — but nothing has run on a phone, so every platform claim is still
+documentation-derived and every performance figure is still a simulator output.
 
-The shortest path to real data is: (1) a Gradle/NDK project skeleton, (2) a **capability probe**
-that verifies rather than trusts Camera2 characteristics, (3) a **camera recorder** writing the
-capture-bundle format `ffreplay` already consumes. The moment (3) works, every analysis tool
+**Android status.** `platform/android/` + `app/` build a real APK containing exactly one
+`arm64-v8a` `libfileflow.so`; `core/` cross-compiles under NDK r29 **unchanged**, which validated
+ADR-0010 for the first time. Toolchain here: JDK 21 (Android Studio's JBR), SDK 33–36, NDK
+29.0.14206865, Gradle wrapper 8.11.1, AGP 8.7.3.
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+./gradlew :app:assembleDebug        # produces app/build/outputs/apk/debug/app-debug.apk
+```
+
+Implemented: **C02's decision logic** (`core/device.cpp`, a pure function, 19 desktop tests) with
+a thin Kotlin marshalling layer per **ADR-0014**, and **C05's recording path**
+(`platform/android/src/jni_recorder.cpp`) reusing `harness::CaptureWriter` so bundles are
+byte-compatible with what `ffreplay` consumes by construction.
+
+**What is NOT implemented, and it is the whole remaining gap to real data:** the *verification*
+half of the probe (nothing upgrades `Evidence` to `kVerified`, so the probe returns
+`kUnsupported` on every device — correct, not a bug) and the **live `CameraCaptureSession`** —
+opening it, locking exposure/ISO/focus/AWB, and checking the requested settings actually appear
+in the returned `CaptureResult` (RISK-011). Until that exists there is nothing to record.
+
+The remaining path to real data: (1) open a capture session and lock manual settings, (2) verify
+by measurement so `Evidence` can become `kVerified` (EXP-006 for `Fd`, EXP-007 for the camera),
+(3) record a bundle and replay it through `ffreplay`. The moment (3) works, every analysis tool
 built so far applies to real data unchanged — no transmitter, UI or live link required.
 
-**Building the Android project is a large structural addition (Gradle, NDK toolchain, manifest,
-permissions) and the user has not yet given a go-ahead. Ask before starting it.**
+**Beware F25's lesson before trusting any platform claim in `docs/research/`:** the first one to
+meet a compiler was wrong. `SENSOR_ROLLING_SHUTTER_SKEW` is a `CaptureResult` key, not a
+`CameraCharacteristics` key, so C02 could never have read it.
 
 ## Suggested next work, in value order
 
