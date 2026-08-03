@@ -23,6 +23,7 @@ add_library(fileflow_core STATIC
     src/pipeline.cpp
     src/intra_fec.cpp
     src/link.cpp
+    src/device.cpp
 )
 
 target_include_directories(fileflow_core PUBLIC

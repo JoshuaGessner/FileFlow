@@ -66,6 +66,13 @@ struct Options {
     // Run the adaptive link controller (C14) alongside the transfer and report which nsym the
     // receiver's own telemetry would have chosen. REPORTING ONLY -- see the note it prints.
     bool adapt = false;
+
+    // Suppress every line whose value depends on THIS HOST rather than on the channel: decoder
+    // throughput, real-time headroom, and the simulator's own render time. What remains is
+    // reproducible from the flags plus the commit, which is what a determinism gate needs to
+    // compare (finding F24 -- the gate previously compared wall-clock timings and could not
+    // ever have passed).
+    bool no_host_metrics = false;
 };
 
 double Arg(const char* v) { return std::strtod(v, nullptr); }
@@ -116,7 +123,13 @@ void Usage() {
         "                               telemetry and report the one that maximises expected\n"
         "                               payload. REPORTING ONLY: nsym fixes the fountain\n"
         "                               symbol size, which the manifest fixes for the whole\n"
-        "                               session, so it cannot be changed mid-transfer.\n");
+        "                               session, so it cannot be changed mid-transfer.\n"
+        "\n"
+        "REPRODUCIBILITY\n"
+        "  --no-host-metrics            omit decoder throughput, real-time headroom and render\n"
+        "                               time -- the only lines whose value depends on THIS\n"
+        "                               HOST. What remains is reproducible from the flags plus\n"
+        "                               the commit, so a determinism gate can compare it.\n");
 }
 
 }  // namespace
@@ -167,6 +180,7 @@ int main(int argc, char** argv) {
         else if (a == "--fec-nsym") o.fec_nsym = static_cast<std::size_t>(Arg(next()));
         else if (a == "--erase-below") o.erase_below = static_cast<int>(Arg(next()));
         else if (a == "--adapt") o.adapt = true;
+        else if (a == "--no-host-metrics") o.no_host_metrics = true;
         else { std::fprintf(stderr, "unknown flag: %s\n", a.c_str()); Usage(); return 2; }
     }
 
@@ -698,15 +712,20 @@ int main(int argc, char** argv) {
     // frames, which says nothing about the optical channel. It matters only as a check that
     // the decoder could keep up in real time (RISK-006).
     // Simulator rendering is transmitter-side and must not be charged to the decoder.
-    const double decode_secs = secs - render_seconds;
-    const double decode_fps =
-        decode_secs > 0.0 ? static_cast<double>(captured) / decode_secs : 0.0;
-    std::printf("decoder throughput       %.0f frames/s on this host (NOT a channel rate)\n",
-                decode_fps);
-    std::printf("  real-time headroom     %.1fx vs Fd=%.0f\n", decode_fps / o.fd, o.fd);
-    if (o.image_path) {
-        std::printf("  (simulator rendering    %.1f s of %.1f s wall, excluded above)\n",
-                    render_seconds, secs);
+    //
+    // These three lines are also the ONLY output above that is not reproducible from the flags
+    // plus the commit, which is why --no-host-metrics suppresses exactly them and nothing else.
+    if (!o.no_host_metrics) {
+        const double decode_secs = secs - render_seconds;
+        const double decode_fps =
+            decode_secs > 0.0 ? static_cast<double>(captured) / decode_secs : 0.0;
+        std::printf("decoder throughput       %.0f frames/s on this host (NOT a channel rate)\n",
+                    decode_fps);
+        std::printf("  real-time headroom     %.1fx vs Fd=%.0f\n", decode_fps / o.fd, o.fd);
+        if (o.image_path) {
+            std::printf("  (simulator rendering    %.1f s of %.1f s wall, excluded above)\n",
+                        render_seconds, secs);
+        }
     }
     return verified ? 0 : 1;
 }

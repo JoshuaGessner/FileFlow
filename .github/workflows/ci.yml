@@ -63,16 +63,36 @@ jobs:
           ./build/desktop-release/sim/ffsim --payload 65536 \
             --noise 12 --shot 0.6 --crosstalk 0.15 --gamma 2.2 \
             --vignetting 0.35 --drop 0.2
+      # --no-host-metrics is REQUIRED here, not cosmetic. ffsim also reports decoder throughput
+      # and real-time headroom, which are wall-clock measurements of the runner and cannot be
+      # identical between two runs. Comparing full stdout made this gate impossible to pass —
+      # and because CI had never actually executed, nobody knew (finding F24).
       - name: Determinism — same seed must give identical output
         run: |
-          A=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8)
-          B=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8)
+          A=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8 --no-host-metrics)
+          B=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8 --no-host-metrics)
           if [ "$A" != "$B" ]; then
             echo "::error::simulator is non-deterministic; regression tests are meaningless"
             diff <(echo "$A") <(echo "$B") || true
             exit 1
           fi
-          echo "deterministic"
+          echo "deterministic (cell-sample path)"
+
+          # The image path is the stronger check: it renders pixels and runs the whole geometry
+          # chain, so it exercises far more floating point than the cell-sample path above.
+          # ENGINEERING-PRACTICES flags FP in the decode path as a determinism hazard; this is
+          # where that would show up first.
+          C=$(./build/desktop-release/sim/ffsim --payload 16384 --seed 3 --image-path \
+                --image-size 900 1500 --yaw 8 --no-host-metrics)
+          D=$(./build/desktop-release/sim/ffsim --payload 16384 --seed 3 --image-path \
+                --image-size 900 1500 --yaw 8 --no-host-metrics)
+          if [ "$C" != "$D" ]; then
+            echo "::error::image path is non-deterministic — recorded-capture regression testing"
+            echo "::error::would be meaningless (ENGINEERING-PRACTICES: FP is the hazard)"
+            diff <(echo "$C") <(echo "$D") || true
+            exit 1
+          fi
+          echo "deterministic (image path)"
 
       # The image path runs the REAL geometry chain (detect/track, rectify, sample,
       # normalise). The cell-sample smoke above cannot catch a regression in any of it.
