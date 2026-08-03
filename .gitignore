@@ -1,0 +1,20 @@
+build/
+out/
+.cache/
+compile_commands.json
+*.o
+*.a
+*.so
+*.dylib
+.DS_Store
+.idea/
+.vscode/
+local.properties
+.gradle/
+.externalNativeBuild/
+.cxx/
+__pycache__/
+*.pyc
+# Raw experiment data is append-only and committed deliberately, not ignored.
+# Large capture sets live outside the repo; see docs/testing/CAPTURE-HARNESS.md
+captures/

@@ -1,0 +1,209 @@
+# FileFlow CI.
+#
+# The `core-desktop` job is the important one architecturally: it builds core/ with NO
+# Android toolchain present, which turns ADR-0010's "the decode chain must run off-device"
+# from a convention into a build failure. Everything else is conventional hygiene.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-desktop:
+    name: core/ builds with no Android toolchain (ADR-0010)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure core only
+        run: cmake --preset core-only
+      - name: Build
+        run: cmake --build build/core-only -j
+      - name: Assert core/ has no Android dependency
+        run: |
+          if grep -rn --include=*.cpp --include=*.h -E '#include <(android|jni)' core/; then
+            echo "::error::core/ must not depend on Android headers (ADR-0010)"
+            exit 1
+          fi
+          echo "core/ is platform-clean"
+
+  tests:
+    name: unit tests + golden vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset desktop-debug
+      - run: cmake --build build/desktop-debug -j
+      - run: ctest --preset desktop-debug
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset desktop-asan
+      - run: cmake --build build/desktop-asan -j
+      - name: Run tests under sanitizers
+        run: ctest --preset desktop-asan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  sim-smoke:
+    name: simulator smoke (fixed seeds, must stay deterministic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset desktop-release
+      - run: cmake --build build/desktop-release -j
+      - name: Identity channel must verify
+        run: ./build/desktop-release/sim/ffsim --payload 65536 --noise 0
+      - name: Impaired channel must still verify
+        run: |
+          ./build/desktop-release/sim/ffsim --payload 65536 \
+            --noise 12 --shot 0.6 --crosstalk 0.15 --gamma 2.2 \
+            --vignetting 0.35 --drop 0.2
+      - name: Determinism — same seed must give identical output
+        run: |
+          A=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8)
+          B=$(./build/desktop-release/sim/ffsim --payload 32768 --seed 7 --noise 8)
+          if [ "$A" != "$B" ]; then
+            echo "::error::simulator is non-deterministic; regression tests are meaningless"
+            diff <(echo "$A") <(echo "$B") || true
+            exit 1
+          fi
+          echo "deterministic"
+
+      # The image path runs the REAL geometry chain (detect/track, rectify, sample,
+      # normalise). The cell-sample smoke above cannot catch a regression in any of it.
+      - name: Image path must verify, head-on and oblique
+        run: |
+          ./build/desktop-release/sim/ffsim --payload 16384 --image-path \
+            --image-size 1200 2000
+          ./build/desktop-release/sim/ffsim --payload 16384 --image-path \
+            --image-size 1200 2000 --yaw 15 --pitch 10 --falloff 0.5 --img-glare 60 --blur 1
+
+      # Guards finding F18: intra-frame FEC is load-bearing, not an optimisation. On a
+      # channel this impaired the transfer does not complete without it.
+      - name: Intra-frame FEC is required on an impaired channel
+        run: |
+          set +e
+          ./build/desktop-release/sim/ffsim --payload 65536 --seed 5 --fec-nsym 0 \
+            --noise 26 --shot 0.9 --crosstalk 0.20 --occlusion 0.03 --drop 0.10 \
+            --max-frames 4000 > /tmp/nofec.txt 2>&1
+          NOFEC=$?
+          set -e
+          if [ "$NOFEC" = "0" ]; then
+            echo "::error::transfer verified WITHOUT intra-frame FEC — the impairment set is"
+            echo "::error::too weak to exercise the FEC layer; strengthen it or F18 is stale"
+            exit 1
+          fi
+          ./build/desktop-release/sim/ffsim --payload 65536 --seed 5 --fec-nsym 32 \
+            --noise 26 --shot 0.9 --crosstalk 0.20 --occlusion 0.03 --drop 0.10
+          echo "FEC off: failed as expected; FEC on: verified"
+
+      # The replay harness is the path every real capture will arrive on, so it must be
+      # proven faithful continuously, not once. Record a synthetic bundle, replay it, and
+      # require the production chain to decode every frame.
+      - name: Capture bundle records and replays
+        run: |
+          rm -rf /tmp/ci-bundle
+          ./build/desktop-release/sim/ffsim --payload 16384 --image-path \
+            --image-size 900 1500 --yaw 8 --blur 1 --record /tmp/ci-bundle
+          OUT=$(./build/desktop-release/harness/ffreplay /tmp/ci-bundle)
+          echo "$OUT"
+          IN=$(echo  "$OUT" | awk '/frames in/ {print $3}')
+          DEC=$(echo "$OUT" | awk '/frames decoded/ {print $3}')
+          if [ "$IN" != "$DEC" ] || [ "$DEC" = "0" ]; then
+            echo "::error::replay decoded $DEC of $IN frames — harness is not faithful"
+            exit 1
+          fi
+          echo "replayed $DEC/$IN frames"
+
+      # Guards finding F23: the adaptive link controller must score rungs by the CORRECTION
+      # BUDGET (2*errors + erasures), not by the erasure load alone.
+      #
+      # This channel is the trap. Its worst erasure load is 9 at every rung, so an
+      # erasure-only estimator predicts a perfect frame success rate at nsym=16 and
+      # recommends it -- while the real decoder fails 11 of 117 frames there and loses 24%
+      # of the goodput available at the optimum. The brute-force optimum is a 24/32/40
+      # plateau (86.3 KB/s each, EXP-023), so any recommendation below 24 means the budget
+      # term has been dropped again.
+      - name: Adaptive controller must not recommend an under-protected rung
+        run: |
+          OUT=$(./build/desktop-release/sim/ffsim --payload 131072 --seed 5 --fec-nsym 32 \
+                  --adapt --noise 26 --shot 0.9 --crosstalk 0.20 --occlusion 0.03 --drop 0.10)
+          echo "$OUT"
+          REC=$(echo "$OUT" | awk '/^recommended nsym/ {print $3}')
+          if [ -z "$REC" ]; then
+            echo "::error::--adapt produced no recommendation"
+            exit 1
+          fi
+          if [ "$REC" -lt 24 ]; then
+            echo "::error::controller recommended nsym=$REC on a channel whose optimum plateau"
+            echo "::error::starts at 24. An erasure-only estimator gives exactly this answer —"
+            echo "::error::see finding F23 and IntraFec::Stats::worst_budget_used."
+            exit 1
+          fi
+          echo "recommended nsym=$REC (>= 24, inside the measured optimal plateau)"
+
+      # Guards finding F15: localisation must not depend on payload content. A zero-padded
+      # tail is entirely normal and used to make the screen undetectable.
+      - name: Image path must not depend on payload content
+        run: |
+          OUT=$(./build/desktop-release/sim/ffsim --payload 16384 --image-path \
+                  --image-size 1200 2000 --no-tracking)
+          echo "$OUT"
+          FAILS=$(echo "$OUT" | awk '/detection failures/ {print $3}')
+          if [ "$FAILS" != "0" ]; then
+            echo "::error::$FAILS detection failures — localisation is payload-dependent (F15)"
+            exit 1
+          fi
+          echo "no detection failures"
+
+  fuzz-smoke:
+    name: libFuzzer smoke (Linux only — Apple clang ships no libFuzzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Configure
+        run: cmake --preset desktop-fuzz
+        env:
+          CC: clang
+          CXX: clang++
+      - run: cmake --build build/desktop-fuzz -j
+      - name: Time-boxed fuzz run
+        run: |
+          for t in fuzz_frame_header fuzz_manifest fuzz_header_codec fuzz_reed_solomon \
+                   fuzz_screen_detect; do
+            echo "--- $t ---"
+            ./build/desktop-fuzz/fuzz/$t -max_total_time=60 -print_final_stats=1
+          done
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: crash-*
+
+  perf-model:
+    name: performance model regenerates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Model must run and emit JSON
+        run: |
+          python3 tools/perf_model/perf_model.py > /dev/null
+          python3 tools/perf_model/perf_model.py --json | python3 -c "import json,sys; json.load(sys.stdin)"
+
+  docs:
+    name: documentation links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check relative markdown links
+        run: python3 tools/check_links.py

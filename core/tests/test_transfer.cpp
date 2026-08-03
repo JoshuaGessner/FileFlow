@@ -1,0 +1,291 @@
+#include <fileflow/transfer.h>
+
+#include <gtest/gtest.h>
+
+#include <vector>
+
+using namespace fileflow;
+
+namespace {
+std::vector<std::uint8_t> Payload(std::size_t n, std::uint64_t seed = 99) {
+    std::vector<std::uint8_t> v(n);
+    SplitMix64 rng(seed);
+    for (auto& b : v) b = static_cast<std::uint8_t>(rng.Next() & 0xFF);
+    return v;
+}
+}  // namespace
+
+// ---------------------------------------------------------------- filename safety
+
+TEST(SanitiseFileName, StripsPathTraversal) {
+    // THREAT-MODEL T3. The received name is a DISPLAY HINT, never a path.
+    EXPECT_EQ(SanitiseFileName("../../etc/passwd"), "passwd");
+    EXPECT_EQ(SanitiseFileName("/etc/shadow"), "shadow");
+    EXPECT_EQ(SanitiseFileName("..\\..\\windows\\system32\\cfg"), "cfg");
+    EXPECT_EQ(SanitiseFileName("dir/sub/file.txt"), "file.txt");
+}
+
+TEST(SanitiseFileName, RejectsDotOnlyNames) {
+    EXPECT_EQ(SanitiseFileName(".."), "received.bin");
+    EXPECT_EQ(SanitiseFileName("."), "received.bin");
+    EXPECT_EQ(SanitiseFileName("..."), "received.bin");
+    EXPECT_EQ(SanitiseFileName(""), "received.bin");
+}
+
+TEST(SanitiseFileName, StripsControlCharactersAndNulls) {
+    const std::string nasty = std::string("ev\x01il\x7f.txt\0hidden", 17);
+    const std::string out = SanitiseFileName(nasty);
+    EXPECT_EQ(out.find('\x01'), std::string::npos);
+    EXPECT_EQ(out.find('\x7f'), std::string::npos);
+    EXPECT_EQ(out.find('\0'), std::string::npos);
+}
+
+TEST(SanitiseFileName, BoundsLength) {
+    const std::string huge(5000, 'a');
+    EXPECT_LE(SanitiseFileName(huge).size(), FileManifest::kMaxNameLength);
+}
+
+// ---------------------------------------------------------------- manifest
+
+TEST(FileManifest, RoundTrips) {
+    FileManifest m;
+    m.file_size = 100000;
+    m.sha256 = Sha256::Of(Payload(100));
+    m.file_name = "test.bin";
+    m.block_count = 4;
+    m.block_symbols = 64;
+    m.symbol_size = 512;
+    m.session_id = 0xABCD1234;
+    ASSERT_TRUE(m.Validate().ok());
+
+    auto d = FileManifest::Decode(m.Encode());
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    EXPECT_EQ(d.value().file_size, m.file_size);
+    EXPECT_EQ(d.value().sha256, m.sha256);
+    EXPECT_EQ(d.value().file_name, m.file_name);
+    EXPECT_EQ(d.value().block_count, m.block_count);
+    EXPECT_EQ(d.value().session_id, m.session_id);
+}
+
+TEST(FileManifest, RejectsHostileValues) {
+    FileManifest m;
+    m.file_size = 1000;
+    m.block_count = 1;
+    m.block_symbols = 64;
+    m.symbol_size = 512;
+
+    // Oversized file
+    auto a = m; a.file_size = FileManifest::kMaxFileSize + 1;
+    EXPECT_FALSE(a.Validate().ok());
+
+    // Zero everything
+    auto b = m; b.block_count = 0;
+    EXPECT_EQ(b.Validate().error(), Error::kValueOutOfRange);
+    auto c = m; c.symbol_size = 0;
+    EXPECT_EQ(c.Validate().error(), Error::kValueOutOfRange);
+
+    // Capacity smaller than the declared file size -- would truncate silently.
+    auto d = m; d.file_size = 10'000'000;
+    EXPECT_EQ(d.Validate().error(), Error::kLengthMismatch);
+
+    // Overflow in block_symbols * symbol_size
+    auto e = m;
+    e.block_symbols = FountainParams::kMaxSourceSymbols;
+    e.symbol_size = FountainParams::kMaxSymbolSize;
+    e.block_count = FileManifest::kMaxBlockCount;
+    EXPECT_FALSE(e.Validate().ok());
+}
+
+TEST(FileManifest, TruncationAndCorruptionAreRejected) {
+    FileManifest m;
+    m.file_size = 100000;
+    m.file_name = "x.bin";
+    m.block_count = 4;
+    m.block_symbols = 64;
+    m.symbol_size = 512;
+    const auto bytes = m.Encode();
+
+    for (std::size_t n = 0; n < bytes.size(); ++n) {
+        EXPECT_FALSE(FileManifest::Decode(std::span(bytes.data(), n)).ok()) << "len " << n;
+    }
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        auto corrupt = bytes;
+        corrupt[i] ^= 0x40;
+        EXPECT_FALSE(FileManifest::Decode(corrupt).ok()) << "byte " << i;
+    }
+}
+
+TEST(FileManifest, ArbitraryGarbageNeverCrashes) {
+    SplitMix64 rng(1234);
+    for (int trial = 0; trial < 20000; ++trial) {
+        std::vector<std::uint8_t> buf(1 + (rng.Next() % 200));
+        for (auto& b : buf) b = static_cast<std::uint8_t>(rng.Next() & 0xFF);
+        auto d = FileManifest::Decode(buf);
+        (void)d;
+    }
+}
+
+// ---------------------------------------------------------------- transfer
+
+TEST(Transfer, CleanChannelRoundTrip) {
+    const auto payload = Payload(50000);
+    auto tx = FileTransmitter::Create(payload, "data.bin", 0x1234, 256, 32);
+    ASSERT_TRUE(tx.ok()) << ErrorName(tx.error());
+
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    while (!rx.value().complete()) {
+        auto fp = tx.value().NextFrame();
+        rx.value().Ingest(fp.header, fp.data);
+    }
+
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok()) << ErrorName(out.error());
+    EXPECT_EQ(out.value(), payload);
+}
+
+TEST(Transfer, SurvivesHeavyFrameLoss) {
+    const auto payload = Payload(20000);
+    auto tx = FileTransmitter::Create(payload, "lossy.bin", 0x99, 256, 32);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    // Drop 40% of frames. Fountain coding is supposed to make this a non-event.
+    SplitMix64 rng(7);
+    std::uint64_t guard = 0;
+    while (!rx.value().complete() && guard++ < 500000) {
+        auto fp = tx.value().NextFrame();
+        if (rng.NextDouble() < 0.4) continue;
+        rx.value().Ingest(fp.header, fp.data);
+    }
+
+    ASSERT_TRUE(rx.value().complete()) << "did not converge under 40% loss";
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok()) << ErrorName(out.error());
+    EXPECT_EQ(out.value(), payload);
+}
+
+TEST(Transfer, RejectsForeignSessionPackets) {
+    // THREAT-MODEL T8: two transmitters in view must not corrupt each other's session.
+    const auto payload = Payload(5000);
+    auto tx = FileTransmitter::Create(payload, "a.bin", 0x1111, 256, 16);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    auto fp = tx.value().NextFrame();
+    auto foreign = fp;
+    foreign.header.session_id = 0x2222;
+    for (auto& b : foreign.data) b ^= 0xFF;
+
+    rx.value().Ingest(foreign.header, foreign.data);
+    EXPECT_EQ(rx.value().symbols_ingested(), 0u) << "foreign session packet was accepted";
+}
+
+TEST(Transfer, RejectsOutOfRangeBlockId) {
+    const auto payload = Payload(5000);
+    auto tx = FileTransmitter::Create(payload, "a.bin", 0x1111, 256, 16);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    auto fp = tx.value().NextFrame();
+    fp.header.block_id = 999999;
+    rx.value().Ingest(fp.header, fp.data);
+    EXPECT_EQ(rx.value().symbols_ingested(), 0u);
+}
+
+TEST(Transfer, AccidentallyCorruptedFrameIsErasedAndRecovered) {
+    // A channel-corrupted symbol must never reach the fountain decoder. The per-frame
+    // payload CRC turns it into a frame ERASURE, which the fountain layer absorbs -- so the
+    // transfer still completes CORRECTLY rather than failing at the end.
+    const auto payload = Payload(10000);
+    auto tx = FileTransmitter::Create(payload, "c.bin", 0x55, 256, 32);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    int flipped = 0;
+    std::uint64_t guard = 0;
+    while (!rx.value().complete() && guard++ < 500000) {
+        auto fp = tx.value().NextFrame();
+        if (flipped < 20) {
+            fp.data[0] ^= 0x01;  // channel damage: CRC in the header still covers the original
+            ++flipped;
+        }
+        rx.value().Ingest(fp.header, fp.data);
+    }
+
+    ASSERT_TRUE(rx.value().complete());
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok()) << "erasure was not absorbed: " << ErrorName(out.error());
+    EXPECT_EQ(out.value(), payload);
+}
+
+TEST(Transfer, HashGateCatchesCorruptionThatEvadesEveryChecksum) {
+    // THE GUARANTEE (G3), against a MALICIOUS transmitter (THREAT-MODEL T1/T5) rather than
+    // a noisy channel. An attacker controls every transmitted bit, including the payload
+    // CRC, so they can make corrupted data pass every intermediate check. SHA-256 over the
+    // reassembled file is the last line of defence, and it must hold.
+    const auto payload = Payload(10000);
+    auto tx = FileTransmitter::Create(payload, "evil.bin", 0x55, 256, 32);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    bool tampered = false;
+    std::uint64_t guard = 0;
+    while (!rx.value().complete() && guard++ < 500000) {
+        auto fp = tx.value().NextFrame();
+        if (!tampered && fp.header.esi < tx.value().manifest().block_symbols) {
+            fp.data[0] ^= 0x01;
+            fp.header.payload_crc = Crc32(fp.data);  // forge a matching CRC
+            tampered = true;
+        }
+        rx.value().Ingest(fp.header, fp.data);
+    }
+
+    ASSERT_TRUE(tampered);
+    auto out = rx.value().Finish();
+    ASSERT_FALSE(out.ok()) << "tampered transfer was delivered as valid";
+    EXPECT_EQ(out.error(), Error::kHashMismatch);
+}
+
+TEST(Transfer, IncompleteTransferDeliversNothing) {
+    const auto payload = Payload(10000);
+    auto tx = FileTransmitter::Create(payload, "p.bin", 0x66, 256, 32);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    for (int i = 0; i < 5; ++i) {
+        auto fp = tx.value().NextFrame();
+        rx.value().Ingest(fp.header, fp.data);
+    }
+    EXPECT_FALSE(rx.value().complete());
+    EXPECT_EQ(rx.value().Finish().error(), Error::kFountainIncomplete);
+}
+
+TEST(Transfer, ProgressAdvancesMonotonically) {
+    const auto payload = Payload(20000);
+    auto tx = FileTransmitter::Create(payload, "p.bin", 0x77, 256, 32);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+
+    double last = 0.0;
+    while (!rx.value().complete()) {
+        auto fp = tx.value().NextFrame();
+        rx.value().Ingest(fp.header, fp.data);
+        const double p = rx.value().progress();
+        EXPECT_GE(p, last);
+        last = p;
+    }
+    EXPECT_NEAR(rx.value().progress(), 1.0, 1e-9);
+}
+
+TEST(Transfer, EmptyPayloadIsRejected) {
+    EXPECT_EQ(FileTransmitter::Create({}, "e.bin", 1).error(), Error::kValueOutOfRange);
+}

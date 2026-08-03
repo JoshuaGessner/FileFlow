@@ -1,0 +1,19 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -2
+AllowShortFunctionsOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<fileflow/'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 1
+  - Regex: '.*'
+    Priority: 3

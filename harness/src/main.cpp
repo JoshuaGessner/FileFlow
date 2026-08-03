@@ -1,0 +1,154 @@
+// ffreplay — decode a recorded capture bundle through the production decode chain.
+//
+// Reports the same metric names as ffsim so replayed and simulated runs are directly
+// comparable. The difference between the two IS the simulator's error, which is how RISK-024
+// (a simulator kinder than reality) gets measured rather than worried about.
+#include <fileflow/harness/capture.h>
+#include <fileflow/modulation.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+
+namespace {
+
+using namespace fileflow;
+
+void Usage() {
+    std::puts(
+        "ffreplay — replay a recorded FileFlow capture bundle\n"
+        "\n"
+        "  ffreplay <bundle-dir> [options]\n"
+        "\n"
+        "  --no-tracking          full acquisition every frame (ADR-0006 A/B)\n"
+        "  --margin F             sampler interior margin (default 0.3)\n"
+        "  --samples N            sampler subsamples per axis (default 3)\n"
+        "  --info                 print metadata and exit\n");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        Usage();
+        return 2;
+    }
+    const std::string bundle = argv[1];
+
+    PipelineConfig cfg;
+    bool info_only = false;
+
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto next = [&]() -> const char* { return (i + 1 < argc) ? argv[++i] : "0"; };
+        if (a == "--help" || a == "-h") { Usage(); return 0; }
+        else if (a == "--no-tracking") cfg.disable_tracking = true;
+        else if (a == "--margin") cfg.sampler.interior_margin = std::strtod(next(), nullptr);
+        else if (a == "--samples") {
+            cfg.sampler.samples_per_axis = static_cast<int>(std::strtol(next(), nullptr, 10));
+        } else if (a == "--info") info_only = true;
+        else { std::fprintf(stderr, "unknown flag: %s\n", a.c_str()); return 2; }
+    }
+
+    // Read metadata first so --info works on a bundle whose grid does not match any layout we
+    // would build, and so the grid comes FROM the bundle rather than being assumed.
+    std::string meta_text;
+    {
+        const std::string path = bundle + "/capture.meta";
+        std::FILE* f = std::fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            std::fprintf(stderr, "cannot open %s\n", path.c_str());
+            return 1;
+        }
+        char buf[4096];
+        std::size_t n = 0;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) meta_text.append(buf, n);
+        std::fclose(f);
+    }
+
+    auto meta_r = harness::CaptureMetadata::Parse(meta_text);
+    if (!meta_r.ok()) {
+        std::fprintf(stderr, "bad metadata: %s\n", ErrorName(meta_r.error()).data());
+        return 1;
+    }
+    const harness::CaptureMetadata& meta = meta_r.value();
+
+    std::printf("--- capture bundle ---\n");
+    std::printf("sender / receiver        %s -> %s\n",
+                meta.sender_model.empty() ? "(unrecorded)" : meta.sender_model.c_str(),
+                meta.receiver_model.empty() ? "(unrecorded)" : meta.receiver_model.c_str());
+    std::printf("app commit               %s\n",
+                meta.app_commit.empty() ? "(unrecorded)" : meta.app_commit.c_str());
+    std::printf("grid                     %ux%u\n", meta.grid_cols, meta.grid_rows);
+    std::printf("capture                  %ux%u @ %.1f fps, %u frames\n", meta.width,
+                meta.height, meta.fps, meta.frame_count);
+    std::printf("rig                      distance %.1f cm, angle %.1f deg, %s\n",
+                meta.distance_cm, meta.angle_deg,
+                meta.motion_condition.empty() ? "(unrecorded)" : meta.motion_condition.c_str());
+
+    // An incomplete capture is still replayable, but it is NOT evidence. Say so loudly rather
+    // than letting a half-labelled dataset quietly become a cited result.
+    const auto missing = meta.MissingRequiredFields();
+    if (!missing.empty()) {
+        std::printf("\n⚠ INCOMPLETE METADATA — not usable as experimental evidence.\n");
+        std::printf("  missing:");
+        for (const auto& f : missing) std::printf(" %s", f.c_str());
+        std::printf("\n");
+    }
+    if (info_only) return 0;
+
+    auto layout_r = FrameLayout::Create(GridGeometry{meta.grid_cols, meta.grid_rows},
+                                        LayoutConfig{});
+    if (!layout_r.ok()) {
+        std::fprintf(stderr, "layout: %s\n", ErrorName(layout_r.error()).data());
+        return 1;
+    }
+    const FrameLayout layout = std::move(layout_r).value();
+
+    auto src_r = harness::ReplaySource::Create(bundle, layout, cfg);
+    if (!src_r.ok()) {
+        std::fprintf(stderr, "replay: %s\n", ErrorName(src_r.error()).data());
+        return 1;
+    }
+    harness::ReplaySource src = std::move(src_r).value();
+
+    std::uint64_t usable_cells = 0;
+    std::uint64_t erased_cells = 0;
+    while (auto f = src.Next()) {
+        for (const double v : f->cell_samples) {
+            if (std::isnan(v)) ++erased_cells; else ++usable_cells;
+        }
+    }
+
+    const auto& d = src.pipeline().diagnostics();
+    std::printf("\n--- decode (production chain; docs/vision/TERMINOLOGY.md) ---\n");
+    std::printf("frames in                %llu\n",
+                static_cast<unsigned long long>(d.frames_in));
+    std::printf("frames decoded           %llu\n",
+                static_cast<unsigned long long>(d.frames_decoded));
+    std::printf("geometry failures        %llu\n",
+                static_cast<unsigned long long>(d.geometry_failures));
+    std::printf("photometric failures     %llu\n",
+                static_cast<unsigned long long>(d.photometric_failures));
+    std::printf("full acquisitions        %llu\n",
+                static_cast<unsigned long long>(src.pipeline().tracker().full_acquisitions()));
+    std::printf("refined frames           %llu\n",
+                static_cast<unsigned long long>(src.pipeline().tracker().refined_frames()));
+    const double px_per_frame =
+        d.frames_in ? static_cast<double>(d.total_pixels_examined) /
+                          static_cast<double>(d.frames_in)
+                    : 0.0;
+    std::printf("geometry pixels/frame    %.0f\n", px_per_frame);
+    const std::uint64_t total_cells = usable_cells + erased_cells;
+    std::printf("cell erasure rate        %.4f\n",
+                total_cells ? static_cast<double>(erased_cells) /
+                                  static_cast<double>(total_cells)
+                            : 0.0);
+
+    // Deliberately NOT reported: goodput. That needs a full transfer with a verified hash, and
+    // this tool decodes frames to cell samples. Printing a rate here would invite exactly the
+    // metric confusion ADR-0012 exists to prevent.
+    std::printf("\n(no goodput reported: this tool decodes frames, it does not run a "
+                "verified transfer)\n");
+    return d.frames_decoded > 0 ? 0 : 1;
+}

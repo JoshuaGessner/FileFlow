@@ -1,0 +1,129 @@
+// Persistent screen tracking (component C06, second half).
+//
+// WHY THIS EXISTS AT ALL: ADR-0006's central claim is that "a persistent tracked grid should
+// outperform repeated independent QR detection". Until this file existed the receiver did
+// full-image acquisition on every frame -- i.e. we were doing the repeated-detection thing
+// ourselves, and the project's founding hypothesis was untested in our own code.
+//
+// The saving is structural, not incremental. Full acquisition scans every pixel of the frame
+// to find the screen. Tracking already knows roughly where the screen is, so it only has to
+// confirm and refine within a small window around the previous quad. That turns an O(image)
+// search into O(search window), and the window does not grow with sensor resolution -- which
+// matters because sensor resolution is exactly what is growing.
+//
+// The state machine is deliberately conservative. Any doubt drops to reacquisition rather
+// than propagating a drifting homography, because a slightly wrong homography is the failure
+// mode that silently poisons every downstream stage (see ScreenDetector's verification note).
+#pragma once
+
+#include <fileflow/detect.h>
+#include <fileflow/geometry.h>
+#include <fileflow/grid.h>
+#include <fileflow/image.h>
+
+#include <array>
+#include <cstdint>
+#include <string_view>
+
+namespace fileflow {
+
+enum class TrackState : std::uint8_t {
+    kSearching = 0,  // no lock; full-image acquisition each frame
+    kTracking,       // locked; refining locally
+    kDegraded,       // lock held but quality falling; still refining, watching closely
+    kLost,           // was locked, now not; next frame reacquires
+};
+
+[[nodiscard]] std::string_view TrackStateName(TrackState s) noexcept;
+
+struct TrackerConfig {
+    DetectionConfig detection;
+
+    // Search window around the predicted quad, as a fraction of the quad's size. Sets how
+    // much inter-frame motion can be absorbed without a full reacquisition.
+    double search_margin = 0.25;
+
+    // Marker score below which a tracked frame is considered degraded.
+    double degrade_score = 0.80;
+
+    // Consecutive degraded/failed frames tolerated before declaring loss. Small on purpose:
+    // holding a bad lock is worse than paying for reacquisition.
+    int max_degraded_frames = 3;
+
+    // Maximum corner movement between frames, as a fraction of quad size, before the result
+    // is rejected as implausible. Guards against snapping onto a different bright object.
+    double max_corner_jump = 0.35;
+};
+
+struct TrackResult {
+    bool ok = false;
+    Homography grid_to_image;
+    std::array<Point2, 4> quad{};
+    TrackState state = TrackState::kSearching;
+    double marker_score = 0.0;
+    bool reacquired = false;  // this frame required a full-image search
+};
+
+class ScreenTracker {
+  public:
+    static Result<ScreenTracker> Create(const FrameLayout& layout, TrackerConfig cfg = {});
+
+    [[nodiscard]] TrackResult Track(const ImageView8& img);
+
+    // Drop the lock, e.g. after a session restart or a display-mode change.
+    void Reset() noexcept;
+
+    [[nodiscard]] TrackState state() const noexcept { return state_; }
+
+    // --- Telemetry. These numbers are the ADR-0006 evidence, so the names have to be exact. ---
+
+    // Frames that yielded a usable homography, BY EITHER PATH. Not "frames tracked" in the
+    // sense of "handled without reacquisition" -- see refined_frames() for that. The
+    // distinction matters: successful_frames / (successful_frames + acquisitions) would
+    // double-count acquisitions and overstate the tracker.
+    [[nodiscard]] std::uint64_t successful_frames() const noexcept { return successful_; }
+
+    // Frames resolved by local refinement alone -- the tracker actually doing its job.
+    [[nodiscard]] std::uint64_t refined_frames() const noexcept { return refined_; }
+
+    [[nodiscard]] std::uint64_t full_acquisitions() const noexcept { return acquisitions_; }
+    [[nodiscard]] std::uint64_t losses() const noexcept { return losses_; }
+
+    // Pixels examined on the last frame, SUMMED across every attempt made for that frame.
+    // A frame whose refinement failed and then reacquired is charged for both, because it
+    // spent both.
+    [[nodiscard]] std::uint64_t last_pixels_examined() const noexcept { return last_px_; }
+
+  private:
+    ScreenTracker(const FrameLayout& layout, TrackerConfig cfg, ScreenDetector detector);
+
+    // Refine within a window around the predicted quad. Returns false if the window yields
+    // nothing plausible, which sends the caller to full reacquisition.
+    [[nodiscard]] bool RefineLocally(const ImageView8& img, TrackResult* out);
+
+    const FrameLayout* layout_;
+    TrackerConfig cfg_;
+    ScreenDetector detector_;
+
+    TrackState state_ = TrackState::kSearching;
+    std::array<Point2, 4> last_quad_{};
+    int degraded_run_ = 0;
+
+    // Binarisation level carried forward from the last acquisition.
+    //
+    // Recomputing Otsu per frame would cost a full-image pass and defeat the whole point of
+    // tracking. Reusing it is consistent with the system design rather than a shortcut:
+    // exposure, ISO and white balance are all LOCKED for the session precisely so the
+    // photometric channel stays stable (docs/research/android-camera-pipeline.md). If it does
+    // drift, marker verification fails, the tracker reacquires, and the threshold is
+    // refreshed -- the mechanism is self-correcting.
+    std::uint32_t threshold_ = 128;
+
+    std::uint64_t successful_ = 0;
+    std::uint64_t refined_ = 0;
+    std::uint64_t acquisitions_ = 0;
+    std::uint64_t losses_ = 0;
+    std::uint64_t last_px_ = 0;
+};
+
+}  // namespace fileflow

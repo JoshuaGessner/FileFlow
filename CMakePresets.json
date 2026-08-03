@@ -1,0 +1,74 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "desktop-debug",
+      "inherits": "base",
+      "displayName": "Desktop debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "desktop-release",
+      "inherits": "base",
+      "displayName": "Desktop release (simulator sweeps need this)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "desktop-asan",
+      "inherits": "base",
+      "displayName": "Desktop ASan + UBSan — the primary memory-safety gate",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "desktop-fuzz",
+      "inherits": "base",
+      "displayName": "Fuzzing (requires a toolchain shipping libFuzzer — not Apple clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FILEFLOW_BUILD_FUZZ": "ON",
+        "FILEFLOW_BUILD_TESTS": "OFF",
+        "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "core-only",
+      "inherits": "base",
+      "displayName": "core/ alone, no Android toolchain — enforces ADR-0010",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FILEFLOW_BUILD_TESTS": "OFF",
+        "FILEFLOW_BUILD_SIM": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "desktop-debug", "configurePreset": "desktop-debug" },
+    { "name": "desktop-release", "configurePreset": "desktop-release" },
+    { "name": "desktop-asan", "configurePreset": "desktop-asan" },
+    { "name": "desktop-fuzz", "configurePreset": "desktop-fuzz" },
+    { "name": "core-only", "configurePreset": "core-only" }
+  ],
+  "testPresets": [
+    {
+      "name": "desktop-debug",
+      "configurePreset": "desktop-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-asan",
+      "configurePreset": "desktop-asan",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

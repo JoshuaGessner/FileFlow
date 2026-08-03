@@ -1,0 +1,31 @@
+# FileFlow static analysis.
+# The parser surface is attacker-controlled (docs/security/THREAT-MODEL.md) and the
+# project uses plain C++20 with no memory-safety hedge, so the bugprone/cert/
+# cppcoreguidelines families carry real weight here. Do not relax without an ADR.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  cppcoreguidelines-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -misc-non-private-member-variables-in-classes,
+  -cppcoreguidelines-non-private-member-variables-in-classes
+
+WarningsAsErrors: >
+  bugprone-signed-char-misuse,
+  bugprone-misplaced-widening-cast,
+  bugprone-integer-division,
+  bugprone-undefined-memory-manipulation,
+  cert-oop54-cpp,
+  clang-analyzer-core.*
+
+HeaderFilterRegex: '.*/(core|sim)/.*'
+FormatStyle: file
