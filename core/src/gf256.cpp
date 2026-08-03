@@ -9,8 +9,12 @@ Tables::Tables() noexcept {
     for (std::size_t i = 0; i < 255; ++i) {
         exp[i] = static_cast<std::uint8_t>(x);
         log[static_cast<std::size_t>(x)] = static_cast<std::uint8_t>(i);
-        x <<= 1;
-        if (x & 0x100U) x ^= kPrimitive;
+        // Explicit narrowing on both lines: integer promotion makes `x << 1` and `x ^ kPrimitive`
+        // int-typed, so assigning back to uint16_t is a narrowing conversion that GCC flags
+        // under -Wconversion. The values provably fit (x stays under 0x200 by construction);
+        // the casts say so rather than leaving it implicit.
+        x = static_cast<std::uint16_t>(x << 1);
+        if (x & 0x100U) x = static_cast<std::uint16_t>(x ^ kPrimitive);
     }
     // Duplicate so Mul() can index log[a]+log[b] (max 508) without a modulo.
     for (std::size_t i = 255; i < 512; ++i) exp[i] = exp[i - 255];

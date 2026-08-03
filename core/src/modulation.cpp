@@ -41,7 +41,11 @@ void PackBits(std::span<const std::uint8_t> bytes, std::vector<std::uint8_t>* bi
     bits_out->clear();
     bits_out->reserve(bytes.size() * 8);
     for (std::uint8_t b : bytes) {
-        for (int i = 7; i >= 0; --i) bits_out->push_back((b >> i) & 1U);
+        // `(b >> i) & 1` is int-typed after promotion; mixing in an unsigned literal made it a
+        // signed-to-unsigned conversion. Kept signed and narrowed explicitly instead.
+        for (int i = 7; i >= 0; --i) {
+            bits_out->push_back(static_cast<std::uint8_t>((b >> i) & 1));
+        }
     }
 }
 
