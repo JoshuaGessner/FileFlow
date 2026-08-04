@@ -227,9 +227,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
-      - name: Install NDK r29
+      # The runner ships an Android SDK but sdkmanager is not on PATH, so use the official
+      # action rather than guessing at its location.
+      - uses: android-actions/setup-android@v3
+      - name: Install the pinned NDK and CMake
         run: |
-          yes | sdkmanager --install "ndk;29.0.14206865" "cmake;3.22.1" >/dev/null
+          # Versions are pinned in app/build.gradle.kts (ADR-0013: NDK r29, CMake 3.22+, and AGP
+          # silently defaults to CMake 3.10.2 when unset). Keep them in step with that file.
+          sdkmanager --install "ndk;29.0.14206865" "cmake;3.22.1"
       - name: Assemble
         run: ./gradlew :app:assembleDebug --no-daemon
       - name: The APK must contain exactly one .so, arm64 only
