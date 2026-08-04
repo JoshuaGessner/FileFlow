@@ -1029,6 +1029,128 @@ claims in front of a toolchain early rather than treating the research phase as 
 
 ---
 
+## F26 — The verdict contradicted its own claims block `[FACT]`
+
+**Found:** 2026-08-04, reading the first real hardware report — by reading it, not by testing it.
+
+The probe printed, on one screen:
+
+```
+  realtime clock   true                            <- CLAIMED BY THE PLATFORM
+  - no trustworthy REALTIME timestamp source ...   <- NATIVE VERDICT
+```
+
+**The logic was right and the wording was wrong.** `clock_cross_check_available` requires the
+timestamp evidence to be trustworthy *and* the source to be REALTIME. The device claims REALTIME
+but the claim is unverified, so refusing the cross-check is exactly correct (RISK-011). The note
+just described that refusal as though the device had said the opposite.
+
+In a project whose entire discipline is separating a claim from evidence for it, a verdict that
+appears to deny a claim the device actually made is worse than a cosmetic bug: it teaches the
+reader to distrust the report, and the report is the whole product of C02.
+
+**Fix.** Split the note three ways, matching the pattern the `MANUAL_SENSOR` check twelve lines
+above it already used: *refuted*, *not claimed at all*, and *claimed but unverified*. These call
+for different work — a device that does not claim REALTIME never will, while a device that claims
+it needs EXP-008 — so collapsing them also destroyed information. Test:
+`AClaimedButUnverifiedClockIsNotDescribedAsMissing` asserts the refusal stands *and* that the note
+does not deny the claim.
+
+**The generalisable part.** The inconsistency sat **inside a single function**, twelve lines
+apart, where one check handled its three cases and the next handled one. Neither was wrong in
+isolation and no test compared them. It took printing both next to each other on a phone to see
+it — the first time those two blocks had ever been rendered together. **Output formatting is not
+cosmetic when the output is the deliverable**, and reading a report as its audience is a different
+activity from testing it as a function.
+
+---
+
+## F27 — First real hardware data: what the S26 Ultra actually claims `[FACT]`
+
+**Collected:** 2026-08-04, C02 probe on **samsung SM-S948U1** (SoC `SM8850`, Android 16 / API 36),
+build `BP4A.251205.006`. Raw:
+`data/experiments/EXP-007/raw/probe-SM-S948U1-20260804.txt`.
+
+**This is the project's first measurement on a physical device.** Every platform claim in this
+repository was previously documentation- or press-derived. These are read from the device's own
+APIs.
+
+A scoping note before the numbers: **enumeration is not verification.** What follows is what this
+device *advertises to a third-party app*. Whether the advertised modes deliver frames, deliver
+*distinct* frames, or honour manual settings is EXP-007 and EXP-006, and none of it is answered
+here. The probe correctly returned **UNSUPPORTED** for that reason.
+
+### DEVICE-MATRIX claims that held
+
+| Claim (press/vendor) | Device reports | Verdict |
+|---|---|---|
+| Native resolution 1440 × 3120 | `1440x3120` | **confirmed** |
+| 120 Hz capable | 120.000 Hz | **confirmed** |
+| Snapdragon 8 Elite Gen 5 | `SM8850` | consistent — model number, not marketing name |
+| Charter grid 144 × 240 integer at 10 × 13 px | in the integer-pitch list, 34,560 cells | **confirmed** |
+
+The grid arithmetic deserves emphasis because it was load-bearing and had never met hardware: the
+probe independently enumerated **24 integer-pitch grids** for this panel, and `144x240` — the
+charter grid DEVICE-MATRIX assigns to this device — is among them, as is the square-cell
+`120x260` (12 × 12 px) alternative. Both were derived by `tools/grid_fit.py` from a *press*
+resolution; both survive contact with the real panel.
+
+**QHD+ is available at 120 Hz.** All three advertised resolutions (1440×3120, 1080×2340,
+720×1560) offer both 120 Hz and 60 Hz. Some Samsung generations restrict the top resolution to
+60 Hz; this one does not, so densest panel geometry and highest refresh are not in conflict.
+There is **no 144 Hz mode** — 120 and 60 only.
+
+### The camera ceiling, and what it costs
+
+| | Advertised |
+|---|---|
+| `INFO_SUPPORTED_HARDWARE_LEVEL` | **LEVEL_3** — the top tier |
+| `MANUAL_SENSOR` | claimed |
+| `SENSOR_INFO_TIMESTAMP_SOURCE` | **REALTIME** claimed |
+| `SENSOR_ROLLING_SHUTTER_SKEW` | **absent** — independently confirms F25 |
+| Fastest CPU-readable (`YUV_420_888`) | **60 fps** |
+| High-speed modes | **2**, both **240 fps**: 1280×720 and 1920×1080 |
+
+Two consequences follow directly, and they are the useful part.
+
+**1. The CPU path caps `Fd` at 60 on this device.** The fastest CPU-readable mode is 60 fps, so
+milestone 6 (≥120) is unreachable on the CPU path whatever the display does. That is ADR-0005's
+dual-path split vindicated by the first device we looked at, and it is the receiver bounding
+`Fd` — exactly as PERFORMANCE-PHILOSOPHY insists.
+
+**2. The high-speed path caps capture at 1080p, which caps grid density.** `[HYP]` The only
+≥120 fps modes are 720p and 1080p. Taking the 144×240 charter grid on this portrait 1440×3120
+panel, captured at 1080×1920 with the screen filling ~80% of frame height:
+
+- screen height ≈ 0.80 × 1920 ≈ 1536 px → **6.4 px/cell** down the columns
+- screen width ≈ 1536 × (1440/3120) ≈ 709 px → **4.9 px/cell** across the rows
+
+So the high-rate path lands at roughly **5 px/cell** — the very densest point the simulator grid
+sweep reached (F16), and one the simulator is *known to be incapable of judging* because it models
+neither sensor MTF nor moiré (F14 retraction, F16). Tagged `[HYP]`: the 80% fill fraction is an
+assumption, not a measurement.
+
+**This is a real tension, now concrete.** The panel supports grids up to 180×390, but on the
+high-rate path the **receiver's 1080p ceiling, not the panel, bounds density**. Chasing display
+density beyond what a 1080p capture can resolve buys nothing at 240 fps. It is precisely the
+`N ↑ → Pc ↓` coupling PERFORMANCE-PHILOSOPHY lists, with numbers attached for the first time.
+
+### What this does to OQ-035
+
+OQ-035 asked whether Samsung restricts ≥60 fps capture for third-party apps, noting that if so
+"the Pixel 8 is the only viable high-frame-rate receiver and milestone 6 rests entirely on it."
+
+**The advertisement contradicts the pessimistic reading.** This third-party app is offered two
+240 fps constrained high-speed modes and several 60 fps CPU-readable modes. The forum reports
+behind OQ-035 concerned ≥60 fps *recording*, a different API surface, and may simply be stale.
+
+**OQ-035 is not closed.** Being offered a mode is not being given frames, and the specific risk
+the research notes flag — a high-speed session returning *duplicated* rather than distinct frames
+— is invisible to enumeration by construction. Narrowed from "we may not even be offered the
+modes" to "we are offered them; do they deliver?", which is EXP-007's verification half.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.
@@ -1054,8 +1176,15 @@ bit-identical to live decode (C17, F17); and the C14 estimator and code-rate pol
 
 **What still is not validated:**
 
-- **No device code at all.** Every platform claim remains `[FACT]`-from-documentation, not
-  measured. This is unchanged and remains the single most important gap.
+- **Almost every platform claim is still unmeasured.** *Corrected 2026-08-04:* this entry
+  read "No device code at all… this is unchanged and remains the single most important gap",
+  which stopped being true when the C02 probe ran on an SM-S948U1 (F27). What that run
+  established is narrow and worth stating precisely: it read the device's *claims* and
+  confirmed four DEVICE-MATRIX figures. It measured **no behaviour**. `Fd` is still
+  unmeasured (EXP-006), frame delivery and distinctness are still unmeasured (EXP-007), and
+  manual-control obedience is still unmeasured — which is why the probe returns UNSUPPORTED.
+  The gap narrowed from "no hardware contact at all" to "enumeration done, verification
+  not started".
 - **The channel model is uncalibrated** (RISK-024). Its impairments are plausible, not
   validated. Every simulator number in this document is `[HYP]` for that reason.
 - `Pc`, `Fd` and the density cliff — the model's highest-leverage unknowns — remain entirely

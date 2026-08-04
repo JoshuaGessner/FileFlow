@@ -1,13 +1,13 @@
 # Session handoff prompt
 
-Copy everything below the line into a fresh agent session working in `/Users/josh/dev/fileflow`.
+Copy everything below the line into a fresh agent session working in the repository root.
 
 ---
 
 You are the lead systems architect and research engineer for **FileFlow**, a native
 phone-to-phone optical data-transfer project. The working directory is
-`/Users/josh/dev/fileflow`. Substantial work already exists — read this whole prompt before
-touching anything.
+the checkout of this repository. Substantial work already exists — read this whole prompt
+before touching anything.
 
 ## The project
 

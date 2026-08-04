@@ -1,8 +1,9 @@
 # Reference device matrix
 
-> **Status:** Draft — specs from vendor/press sources; **nothing here is probe-verified yet**
+> **Status:** Draft — the S26 Ultra column is partly **probe-confirmed** as of 2026-08-04
+> (F27); the Pixel 8 column remains entirely vendor/press-derived
 > **Owner:** RX / capability probe
-> **Last reviewed:** 2026-08-02
+> **Last reviewed:** 2026-08-04
 > **Related:** ADR-0011, EXP-006, EXP-007, OQ-033 (now closed)
 
 Closes **OQ-033**. Two reference devices, selected by availability rather than by the
@@ -99,6 +100,11 @@ The square-cell options are worth taking seriously: isotropic cells make the cro
 model isotropic and remove a free parameter from the sampler. They should be arms in
 EXP-001 and EXP-013.
 
+> **Confirmed on hardware 2026-08-04** (F27). The C02 probe independently enumerated **24
+> integer-pitch grids** for the real 1440×3120 panel, and both recommended S26 Ultra grids
+> are present: **144×240** (34,560 cells) and the square-cell **120×260** (12 × 12 px). This
+> table was computed from a *press* resolution, and the panel turned out to match it.
+
 **Protocol implication:** the grid is **device-dependent**, so it must be negotiated rather
 than assumed. It already is — the frame header carries the grid and profile, and the
 receiver reads it rather than presuming. No protocol change needed, but this confirms that
@@ -108,20 +114,37 @@ was the right call.
 
 ## Capabilities to verify before trusting anything (EXP-007 / EXP-006)
 
+> **S26 Ultra column updated 2026-08-04 from a real probe run** (F27; raw at
+> `data/experiments/EXP-007/raw/probe-SM-S948U1-20260804.txt`, device samsung SM-S948U1,
+> SoC SM8850, Android 16 / API 36). Entries marked *advertised* are what the device tells a
+> third-party app. **None of them is verified behaviour.** Verification is EXP-006 and
+> EXP-007, and its absence is exactly why the probe still returns UNSUPPORTED.
+
 | Question | Pixel 8 | S26 Ultra | Why it matters |
 |---|---|---|---|
-| `INFO_SUPPORTED_HARDWARE_LEVEL` | ? | ? | Need FULL or LEVEL_3 for manual control |
-| Max fps with CPU-accessible `YUV_420_888` | ? | ? | **OQ-001** — decides CPU vs GPU receive path |
-| Constrained high-speed session available? | ? | ? | **OQ-002** — gates milestone 6 entirely |
-| `getHighSpeedVideoSizes` contents | ? | ? | RISK-002 — may be below our grid requirement |
-| Distinct frames at 120 fps via `SurfaceTexture`? | ? | ? | If duplicated, milestone 6 is dead regardless |
-| Manual exposure / ISO / focus / AWB honoured? | ? | ? | Verify in returned `CaptureResult`, not the request |
-| `EDGE_MODE` / `NOISE_REDUCTION_MODE` / `TONEMAP_MODE` honoured? | ? | ? | **OQ-016** — vendor sharpening ruins dense grids |
-| `SENSOR_INFO_TIMESTAMP_SOURCE` | ? | ? | REALTIME enables clock correlation; UNKNOWN does not |
-| `SENSOR_ROLLING_SHUTTER_SKEW` reported and accurate? | ? | ? | **OQ-017** — the M4 mixed-frame parameter |
-| Actual presented display-state rate at 60 / 120 | ? | ? | **`Fd` is assumed, never measured** (EXP-006) |
-| Lossless capture path for the harness? | ? | ? | **OQ-023** — else recordings misrepresent the channel |
-| HWASan supported (ARM64 + API 34+)? | ? | ? | Our on-device memory-safety tool (ADR-0013) |
+| `INFO_SUPPORTED_HARDWARE_LEVEL` | ? | **LEVEL_3** *(advertised)* | Need FULL or LEVEL_3 for manual control |
+| Max fps with CPU-accessible `YUV_420_888` | ? | **60 fps** *(advertised)* | **OQ-001** — decides CPU vs GPU receive path. Caps `Fd` at 60 on the CPU path |
+| Constrained high-speed session available? | ? | **yes — 2 modes** *(advertised)* | **OQ-002** — gates milestone 6 entirely |
+| `getHighSpeedVideoSizes` contents | ? | **1280×720 @ 240, 1920×1080 @ 240** *(advertised)* | RISK-002 — 1080p is the ceiling, which caps grid density (see below) |
+| Distinct frames at 120 fps via `SurfaceTexture`? | ? | **?** | If duplicated, milestone 6 is dead regardless. **Invisible to enumeration — needs EXP-007** |
+| Manual exposure / ISO / focus / AWB honoured? | ? | `MANUAL_SENSOR` *advertised*; obedience **?** | Verify in returned `CaptureResult`, not the request |
+| `EDGE_MODE` / `NOISE_REDUCTION_MODE` / `TONEMAP_MODE` honoured? | ? | **?** | **OQ-016** — vendor sharpening ruins dense grids |
+| `SENSOR_INFO_TIMESTAMP_SOURCE` | ? | **REALTIME** *(advertised)* | REALTIME enables clock correlation; UNKNOWN does not |
+| `SENSOR_ROLLING_SHUTTER_SKEW` reported and accurate? | ? | **not a characteristic** — unobtainable at startup (F25) | **OQ-017** — must come from the recorder, not the probe |
+| Actual presented display-state rate at 60 / 120 | ? | **?** | **`Fd` is assumed, never measured** (EXP-006). The single most important gap |
+| Lossless capture path for the harness? | ? | **?** | **OQ-023** — else recordings misrepresent the channel |
+| HWASan supported (ARM64 + API 34+)? | ? | **?** | Our on-device memory-safety tool (ADR-0013) |
+
+### The high-rate path caps capture at 1080p, and that caps grid density `[HYP]`
+
+The only ≥120 fps modes are 720p and 1080p. Taking 144×240 on this 1440×3120 panel, captured
+at 1080×1920 with the screen filling ~80% of frame height, the receiver sees **~4.9 px/cell**
+across rows and ~6.4 down columns. So on the high-rate path the **receiver, not the panel,
+bounds density** — the 180×390 grid this panel permits is pointless at 240 fps.
+
+EXP-001 and EXP-013 should therefore treat **1080p capture as its own arm** rather than
+assuming the transmitter is the limiting side. The 80% fill fraction is an assumption, which
+is why this is `[HYP]` rather than `[FACT]`.
 
 ### Specific concern: Samsung and third-party high frame rates
 

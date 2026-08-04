@@ -137,7 +137,33 @@ path exists for the capture harness.
 resolution available.
 **Success threshold.** A definitive per-device answer on which capture path to use, and
 whether milestone 6 is testable at all on the available hardware.
-**Conclusion.** — · **Confidence.** —
+
+> **PARTIAL RESULT 2026-08-04 — the ENUMERATION half only** (finding F27). Raw:
+> `data/experiments/EXP-007/raw/probe-SM-S948U1-20260804.txt`. Device: samsung SM-S948U1
+> (SoC SM8850, Android 16 / API 36).
+>
+> Advertised capability set: **LEVEL_3**, `MANUAL_SENSOR`, **REALTIME** timestamps, fastest
+> CPU-readable `YUV_420_888` **60 fps**, and **two** constrained high-speed modes, both
+> **240 fps** (1280×720 and 1920×1080). `SENSOR_ROLLING_SHUTTER_SKEW` is absent from
+> `CameraCharacteristics`, independently confirming F25.
+>
+> **The verification half has NOT run, and it is the half that matters.** No frame has been
+> captured, so distinct-frame fraction, drop rate, readback latency and manual-control obedience
+> are all still unknown. Enumeration cannot answer them: a high-speed session that returns
+> *duplicated* frames advertises identically to one that does not.
+>
+> Two conclusions already follow from enumeration alone:
+> 1. **The CPU path caps `Fd` at 60** on this device, so milestone 6 is unreachable on it
+>    regardless of the display — ADR-0005's dual-path split is vindicated.
+> 2. **The ≥120 fps path caps capture at 1080p**, which caps resolvable grid density to roughly
+>    5 px/cell at the 144×240 charter grid. On the high-rate path the receiver, not the panel,
+>    bounds density (F27).
+
+**Conclusion.** Enumeration done; verification outstanding. · **Confidence.** High for what the
+device *advertises*; **none** for what it delivers.
+**Follow-up.** Run the verification half against the recorder (C05): capture a known counting
+pattern at 60 fps CPU and 240 fps high-speed, and measure the distinct-frame fraction. That run
+also supplies the rolling-shutter skew the probe structurally cannot (F25).
 **Why it matters.** Determines a large implementation fork (ADR-0005) and whether
 milestone 6 has any evidence behind it. **Should run early.**
 

@@ -191,9 +191,23 @@ Result<DeviceProfile> Decide(const DeviceReport& report, TieringPolicy policy) {
 
     p.clock_cross_check_available =
         Trustworthy(report.timestamp_evidence, policy) && report.timestamp_source_realtime;
-    if (!p.clock_cross_check_available) {
-        note("no trustworthy REALTIME timestamp source: the display/camera clock cross-check is "
-             "unavailable, so frame-phase classification rests on optics alone (C07, OQ-017)");
+    // Two different reasons the cross-check can be unavailable, and they call for different work:
+    // a device that does not claim REALTIME never will, while a device that claims it needs an
+    // experiment. Collapsing them into one message made the first real hardware report look
+    // self-contradictory -- it printed "realtime clock true" and "no REALTIME timestamp source"
+    // on the same screen (finding F26). The manual-sensor note above already splits its cases;
+    // this one now matches it.
+    if (report.timestamp_evidence == Evidence::kRefuted) {
+        note("device advertises a REALTIME timestamp source but its timestamps did not survive "
+             "checking — treating the clock cross-check as unavailable (RISK-011)");
+    } else if (!report.timestamp_source_realtime) {
+        note("timestamp source is not REALTIME (SENSOR_INFO_TIMESTAMP_SOURCE = UNKNOWN): camera "
+             "timestamps cannot be compared against display time at all, so frame-phase "
+             "classification rests on optics alone (C07, OQ-017)");
+    } else if (!p.clock_cross_check_available) {
+        note("REALTIME timestamp source claimed but unverified; the display/camera clock "
+             "cross-check is not relied upon until EXP-008 measures it, so frame-phase "
+             "classification rests on optics alone for now (C07, OQ-017)");
     }
 
     // --- Tier ---

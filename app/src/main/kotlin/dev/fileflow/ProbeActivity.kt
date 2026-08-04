@@ -31,13 +31,72 @@ class ProbeActivity : AppCompatActivity() {
         }
         setContentView(ScrollView(this).apply { addView(text) })
 
-        text.text = runCatching { report() }
-            .getOrElse { e -> "probe failed: ${e::class.simpleName}: ${e.message}" }
+        val body = runCatching { report() }
+            .getOrElse { e -> "probe failed: ${e::class.simpleName}: ${e.message}\n" +
+                              e.stackTraceToString() }
+        text.text = body
+        emit(body)
     }
+
+    /**
+     * Emits the report to logcat and to a file, so it can be collected as raw experiment data
+     * rather than transcribed off a screen.
+     *
+     * `data/experiments/` is append-only and every result must carry its provenance
+     * (CONTRIBUTING). A number read off a phone by eye has none, so the machine-collectable copy
+     * is the one that counts. Chunked because logcat truncates long lines.
+     */
+    private fun emit(body: String) {
+        body.lineSequence().forEach { android.util.Log.i(LOG_TAG, it) }
+        runCatching {
+            java.io.File(filesDir, REPORT_FILE).writeText(body)
+            android.util.Log.i(LOG_TAG, "report written to $filesDir/$REPORT_FILE")
+        }.onFailure { android.util.Log.w(LOG_TAG, "could not write report: ${it.message}") }
+    }
+
+    companion object {
+        const val LOG_TAG = "FileFlow.Report"
+        const val REPORT_FILE = "probe-report.txt"
+    }
+
+    /** Human-readable `INFO_SUPPORTED_HARDWARE_LEVEL`. The raw ordinal is not ordered by
+     *  capability (LEGACY=2 sits above FULL=1), which is a genuine trap when reading a report. */
+    private fun hardwareLevelName(level: Int): String = when (level) {
+        0 -> "LIMITED"
+        1 -> "FULL"
+        2 -> "LEGACY  <-- worst tier despite the highest number"
+        3 -> "LEVEL_3"
+        4 -> "EXTERNAL"
+        else -> "unknown($level)"
+    }
+
+    /** Every display mode the panel advertises, so OQ-005's question about holding a high mode
+     *  has a list of candidates to be asked about. */
+    private fun displayModes(): List<String> = runCatching {
+        // `display` is API 30+ and minSdk is 33, so there is no legacy branch to keep here.
+        (display?.supportedModes ?: emptyArray()).sortedByDescending { it.refreshRate }.map {
+            "${it.physicalWidth}x${it.physicalHeight} @ ${"%.3f".format(it.refreshRate)} Hz"
+        }
+    }.getOrElse { listOf("unavailable: ${it.message}") }
+
+    private fun appVersion(): String = runCatching {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    }.getOrElse { "?" }
 
     private fun report(): String = buildString {
         appendLine("FileFlow capability probe (C02)")
         appendLine("=".repeat(52))
+        appendLine()
+
+        // Provenance first. A capability report without the exact build it came from is not
+        // usable as evidence (CONTRIBUTING).
+        appendLine("PROVENANCE")
+        appendLine("  collected        ${java.util.Date()}")
+        appendLine("  fingerprint      ${android.os.Build.FINGERPRINT}")
+        appendLine("  android          ${android.os.Build.VERSION.RELEASE} " +
+                   "(API ${android.os.Build.VERSION.SDK_INT})")
+        appendLine("  app              $packageName ${appVersion()}")
+        appendLine("  abis             ${android.os.Build.SUPPORTED_ABIS.joinToString(",")}")
         appendLine()
 
         val (claims, modes) = CapabilityProbe.readClaims(this@ProbeActivity)
@@ -46,16 +105,31 @@ class ProbeActivity : AppCompatActivity() {
         appendLine("  soc              ${claims.soc}")
         appendLine("  max refresh      ${claims.maxRefreshHz} Hz")
         appendLine("  panel            ${claims.panelWidth}x${claims.panelHeight}")
-        appendLine("  hardware level   ${claims.hardwareLevel}")
+        appendLine("  hardware level   ${hardwareLevelName(claims.hardwareLevel)}")
         appendLine("  manual sensor    ${claims.claimsManualSensor}")
         appendLine("  realtime clock   ${claims.timestampSourceRealtime}")
         appendLine("  RS skew          ${claims.rollingShutterSkewNs} ns")
-        appendLine("  camera modes     ${modes.size}")
-        modes.take(8).forEach {
-            val kind = if (it.highSpeed) "high-speed" else if (it.cpuReadable) "cpu" else "?"
-            appendLine("    ${it.width}x${it.height} @ ${"%.1f".format(it.maxFps)} ($kind)")
+        appendLine()
+
+        appendLine("DISPLAY MODES (all)")
+        displayModes().forEach { appendLine("    $it") }
+        appendLine()
+
+        // The FULL list, deliberately untruncated. This is EXP-007's enumeration half, and a
+        // truncated list could silently drop the high-speed entries milestone 6 depends on.
+        appendLine("CAMERA MODES (all ${modes.size})")
+        modes.forEach {
+            val kind = if (it.highSpeed) "HIGH-SPEED" else if (it.cpuReadable) "cpu-yuv" else "?"
+            appendLine("    ${it.width}x${it.height} @ ${"%.2f".format(it.maxFps)} fps  $kind")
         }
-        if (modes.size > 8) appendLine("    … and ${modes.size - 8} more")
+        val fastestCpu = modes.filter { it.cpuReadable }.maxOfOrNull { it.maxFps } ?: 0.0
+        val fastestHs = modes.filter { it.highSpeed }.maxOfOrNull { it.maxFps } ?: 0.0
+        appendLine("  high-speed modes offered   ${modes.count { it.highSpeed }}")
+        appendLine("  fastest cpu-readable       ${"%.2f".format(fastestCpu)} fps")
+        appendLine("  fastest high-speed         ${"%.2f".format(fastestHs)} fps")
+        appendLine("  OQ-035 asks whether Samsung restricts >=60 fps capture for third-party")
+        appendLine("  apps. THIS IS ONLY WHAT IS ADVERTISED. Whether those frames arrive, and")
+        appendLine("  whether they are DISTINCT, is EXP-007 and is not answered here.")
         appendLine()
 
         appendLine("NATIVE VERDICT (core/device.cpp — ADR-0014)")

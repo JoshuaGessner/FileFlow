@@ -220,6 +220,27 @@ TEST(DeviceProbe, AnUnknownTimestampSourceRemovesTheClockCrossCheck) {
     ASSERT_TRUE(p.ok());
     EXPECT_FALSE(p.value().clock_cross_check_available);
     EXPECT_TRUE(AnyNoteContains(p.value(), "optics alone"));
+    EXPECT_TRUE(AnyNoteContains(p.value(), "not REALTIME"));
+}
+
+TEST(DeviceProbe, AClaimedButUnverifiedClockIsNotDescribedAsMissing) {
+    // Regression for F26, found by reading the first real hardware report: the device claimed a
+    // REALTIME source, and the verdict said there was no REALTIME source. Both statements
+    // appeared on one screen. The claim was true and the refusal was correct -- an unverified
+    // claim earns nothing (RISK-011) -- but the wording contradicted the claims block above it,
+    // in a project whose entire discipline is separating claims from evidence.
+    DeviceReport r = HealthyPixel8();
+    r.timestamp_source_realtime = true;
+    r.timestamp_evidence = Evidence::kClaimed;
+
+    auto p = Decide(r);
+    ASSERT_TRUE(p.ok());
+    // The refusal itself must stand.
+    EXPECT_FALSE(p.value().clock_cross_check_available);
+    EXPECT_TRUE(AnyNoteContains(p.value(), "claimed but unverified"));
+    // And it must NOT deny the claim the device actually made.
+    EXPECT_FALSE(AnyNoteContains(p.value(), "not REALTIME"));
+    EXPECT_FALSE(AnyNoteContains(p.value(), "UNKNOWN"));
 }
 
 TEST(DeviceProbe, HighFdWithoutAHighSpeedModeStaysStandard) {

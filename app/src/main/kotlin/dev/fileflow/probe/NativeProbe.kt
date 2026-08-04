@@ -109,8 +109,12 @@ class NativeProfile(
         appendLine("clock cross-check    $clockCrossCheckAvailable")
         appendLine("milestone 6 testable $canAttemptMilestone6")
         appendLine("grids (densest first)")
-        grids.take(6).forEach { (c, r) -> appendLine("  ${c}x$r  (${c * r} cells)") }
-        if (grids.size > 6) appendLine("  … and ${grids.size - 6} more")
+        // All of them, untruncated. DEVICE-MATRIX's per-device grid claim -- that each charter
+        // grid is integer-pitch on exactly one reference device -- is checked against this list,
+        // and a truncated list cannot confirm or refute it.
+        grids.forEach { (c, r) ->
+            appendLine("  ${c}x$r  (${c * r} cells)")
+        }
         appendLine("why:")
         notes.forEach { appendLine("  - $it") }
     }
