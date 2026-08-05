@@ -46,6 +46,16 @@ class TransmitActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Turn the screen on and show over the keyguard.
+        //
+        // Not convenience: Android REFUSES camera access to a background process, and an activity
+        // launched by `am start` onto a locked device never reaches the foreground. The first
+        // two-device attempt failed with CAMERA_DISABLED ("cannot open camera from background") for
+        // exactly this reason, and on the transmitter side a locked screen displays nothing at all.
+        // A test rig that depends on someone having left both phones unlocked is not a rig.
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+
         // The screen must stay on and at a fixed brightness for the whole run. A dimming screen
         // changes the transmitted luminance mid-transfer, which the receiver would see as the
         // channel degrading (C01's responsibility, exercised here).

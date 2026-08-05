@@ -24,6 +24,7 @@ add_library(fileflow_core STATIC
     src/intra_fec.cpp
     src/link.cpp
     src/device.cpp
+    src/framing.cpp
 )
 
 target_include_directories(fileflow_core PUBLIC

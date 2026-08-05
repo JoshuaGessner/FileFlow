@@ -4,6 +4,7 @@ add_executable(fileflow_tests
     test_gf256.cpp
     test_intra_fec.cpp
     test_link.cpp
+    test_framing.cpp
     test_fuzz_regressions.cpp
     test_device.cpp
     test_fountain.cpp

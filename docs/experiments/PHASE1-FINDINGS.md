@@ -1395,6 +1395,134 @@ it erodes trust in the one tool that was working.
 
 ---
 
+## F32 — Rotation is nearly free for the decoder and expensive for framing `[HYP]`
+
+**Measured:** 2026-08-04, after a hardware run failed with the two phones ~36° out of alignment and
+the question arose of whether the app should tolerate rotation at all.
+
+It already does. Sweeping in-plane roll with **framing held constant** (a square 2400×2400 render, so
+a rotated screen never runs out of frame), 120×260 grid, `nsym` 32:
+
+| Roll | Header `H` | Worst geometric error | Detection failures | Verified |
+|--:|--:|--:|--:|:--|
+| 0° | 1.0000 | 0.134 cells | 0 | yes |
+| 10° | 1.0000 | 0.154 | 0 | yes |
+| 20° | 1.0000 | 0.223 | 0 | yes |
+| 30° | 1.0000 | 0.130 | 0 | yes |
+| 35° | 1.0000 | 0.488 | 0 | yes |
+| **40°** | **1.0000** | **0.523** | **0** | **yes** |
+| 45° | 0.0000 | — | 3000 | **no** |
+
+**Roll is tolerated to at least 40° with no measurable degradation.** F9's marker redesign and F13's
+centroid-scaled annulus were built for exactly this and they work.
+
+**45° is a specific geometric degeneracy, not a general limit.** The detector finds corners by
+streaming the extremes of `x+y` and `x−y` (F12's O(1) accumulator). At 45° the rectangle's own edges
+align with those diagonals, so the extremes stop being unique and the four corners cannot be
+separated. Worth knowing precisely, because "rotation breaks at 45°" invites the wrong fix — the cure
+is a different corner criterion, not more margin.
+
+### The first version of this sweep was wrong, in the way this project keeps being wrong
+
+The same sweep at a **portrait** render size reported failure from **20°**, and that number is an
+artifact. The axis-aligned bounding box of a rotated rectangle is much larger than the rectangle:
+at 20° the box exceeded the render's width, the boundary ring left the frame, and detection failed
+for lack of four lines to fit. **It measured framing while claiming to measure rotation** — and the
+script it ran in carried a comment warning about exactly that confusion.
+
+### The consequence, which is a product decision rather than a code change
+
+Rotation costs the decoder nothing and costs **framing** a great deal: at 35° the bounding box is
+**2.24× the screen's area**. So the honest advice to a user is never "stop rotating" — it is "a
+tilted screen needs more room in view". Two distinctions that are easy to conflate and were:
+
+- The box is 2.24× the screen's **area** at 35°, but only **1.08×** its **long axis**. `px/cell` is a
+  linear measure, so the correction to *density* is 8%, not 124%. The area figure governs whether the
+  screen fits; the linear one governs whether it resolves.
+- Tolerating rotation is not the same as tolerating **perspective**. This sweep varied roll only.
+  Yaw and pitch were measured separately at up to 20°/12° (F10) and are a different envelope.
+
+⚠ Simulator, uncalibrated (RISK-024). The *mechanism* is geometric and will hold; the exact angle at
+which real optics give up may be lower.
+
+---
+
+## F33 — Five framing failures, one useless log line `[FACT]`
+
+**2026-08-04.** Getting two real phones into a geometry that decodes took five iterations. Every one
+of them reported the identical, useless thing:
+
+```
+frames in                20
+frames decoded           0
+geometry failures        20
+```
+
+The five actual causes, in the order they were hit:
+
+1. **The camera was blocked.** `CAMERA_DISABLED: cannot open camera from background`. The receiver's
+   screen was locked, so the activity never reached the foreground, and Android refuses camera access
+   there. Fixed with `setShowWhenLocked` / `setTurnScreenOn` on both activities — the transmitter
+   needs it too, since a locked screen displays nothing.
+2. **Focus at infinity, against a screen 16 cm away.** `LENS_FOCUS_DISTANCE = 0` was hardcoded as a
+   sensible default. It is sensible for a distant subject and catastrophic here. Now continuous AF by
+   default, with an explicit diopter override; AF converged to 6.11 diopters (16.4 cm) and the lens's
+   own minimum is 10.5 cm.
+3. **Grossly overexposed.** ISO 400 and a quarter-frame exposure — reasonable for a room, wrong for
+   staring at a full-brightness OLED. The interior came back **66% bright against 9% dark**, where a
+   two-level frame should be near half and half. Overexposure destroys the *dark* level, and the
+   photometric field needs both (F7). Default ISO is now 60, and both exposure and ISO are parameters
+   because EXP-004/EXP-005 exist to choose them.
+4. **A square sensor mode, chosen by my own selection rule.** Asked for a mode at or below 1920 wide,
+   "largest by area" picked **1920×1920** — which wastes most of its pixels on a portrait screen and
+   delivers no more px/cell than 1920×1080 for 78% more bandwidth. The rule now maximises
+   `m·min(W, H/r) / rows`, i.e. resolvable px/cell for the target grid, weighing resolution and
+   aspect together as area alone cannot.
+5. **The screen ran off the edge of the frame.** Twice, in both directions. Localisation fits the four
+   lines of the always-bright ring and intersects them (F10); with one edge outside the frame there
+   are not four lines, and nothing downstream can recover. At one point the screen was **74% of the
+   frame with a healthy 7.4 px/cell** and still undecodable, because it was clipped.
+
+### The measurement that mattered was never in the log
+
+Every one of these was found by measuring the **pixels** — bounding box, clipping, exposure balance,
+inferred rotation, px/cell — and none was visible in the decode output. The decode chain reports
+*that* geometry failed, which is correct and nearly useless: "screen not found" is the same line
+whether the screen is absent, clipped, blurred, washed out, or 1.9 px/cell.
+
+**The trap that cost the most was an ordering one.** A clipped screen has a perfectly healthy measured
+px/cell *over the part that is visible*, so density-first reasoning says "move closer" when the fix is
+"move back". I made that inversion myself before building the tool that catches it.
+
+### What was built rather than worked around
+
+`core/src/framing.cpp` (`AnalyseAim`, feature **UI-02**, 11 tests) answers "is this geometry workable,
+and if not what should the user change" from one cheap pass over the luminance plane. In portable C++
+per ADR-0014, because it is real logic with real edge cases and Kotlin could not be tested off-device.
+Its verdicts are ordered by **what to fix first**, and clipping is checked before density precisely to
+prevent the inversion above.
+
+Two defects found in the analyser itself while testing it, both worth recording because both produced
+*confident wrong advice* rather than an error:
+
+- **Classifying levels against the threshold instead of the class means.** Otsu's threshold sits near
+  the smaller class, so when a screen filled a quarter of the frame the threshold landed close to the
+  bright level, a fixed band above it reached past 255, and genuinely bright pixels were counted as
+  neither bright nor dark. A perfectly sharp synthetic frame reported **46% blur**. Now classified a
+  quarter of the separation in from each class mean, which scales with whatever contrast exists.
+- **No check that a split exists at all.** On a uniform frame Otsu returns threshold 0, every pixel
+  counts as lit, and the analyser confidently reported a screen filling the whole view. Now a frame
+  with less than 25 counts of separation is reported as *no screen*.
+
+And the accompanying diagnostic tool made the same class of error as the code it was checking: its
+boundary-ring test sampled the outermost **pixel** row, which rounded display corners and composited
+system overlays make dark, so it reported "frame missing, offset or inverted" about a perfectly good
+frame. Sampling the centre of the outermost **cell** fixed it. **A verifier that fails for the wrong
+reason costs as much as the defect it was built to find, and it spends trust that the working tools
+then have to earn back.**
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

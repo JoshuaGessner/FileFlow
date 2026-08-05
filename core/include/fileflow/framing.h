@@ -1,0 +1,126 @@
+// Aiming analysis (feature UI-02): tell a user how to point the receiver at the transmitter.
+//
+// WHY THIS IS A COMPONENT AND NOT A UI DETAIL. Getting the two phones into a workable geometry took
+// FIVE hardware iterations, and every failure arrived as the same useless line in a decode log:
+// "geometry failures 20 of 20". The distinct causes were a locked screen, focus at infinity, gross
+// overexposure, a square sensor mode wasting its pixels, and a rotated screen overflowing the frame
+// (F32, F33). A user with no decode log and no tooling has strictly less information than that.
+//
+// So the receiver has to diagnose its own aim and say what to change. That judgement lives here, in
+// portable C++, for the reason ADR-0014 gives: it is real logic with real edge cases, it must be
+// tested off-device, and a Kotlin implementation could not be.
+//
+// WHAT THE ANALYSIS RESTS ON. Screen localisation fits the four lines of the always-bright boundary
+// ring and intersects them (F10). Two things follow, and they are the whole basis of the advice:
+//
+//   1. **Every edge of that ring must be inside the frame.** Miss one and there are not four lines
+//      to fit, so detection fails outright no matter how good everything else is. This is the
+//      failure that masquerades as "too dense" or "out of focus".
+//
+//   2. **Rotation is nearly free for the decoder and expensive for framing.** Measured: roll is
+//      tolerated to at least 40 degrees with header success 1.0000 and zero detection failures
+//      (F32). But the axis-aligned bounding box of a rotated rectangle is much larger than the
+//      rectangle -- 2.24x at 36 degrees -- and it is the BOX that has to fit. So the advice for a
+//      rotated screen is never "stop rotating"; it is "you need more margin, or align to reclaim
+//      it".
+//
+// Deliberately NOT a detector. It never tries to find corners, fit a homography or read a cell. It
+// answers a cruder and more useful question -- is the geometry workable, and if not what should the
+// user do -- from a single cheap pass over the luminance plane.
+#pragma once
+
+#include <fileflow/grid.h>
+#include <fileflow/image.h>
+#include <fileflow/result.h>
+
+#include <cstdint>
+#include <string>
+
+namespace fileflow {
+
+// Ordered by what a user should fix FIRST. When several problems coexist, the earliest one in this
+// enum is the one reported: telling someone to move closer while the screen is half out of frame
+// produces a worse aim, not a better one.
+enum class AimVerdict : std::uint8_t {
+    kNoScreenFound,     // nothing bright enough to be a screen
+    kClipped,           // the screen runs off an edge -- the ring is incomplete
+    kTooFar,            // fully visible but too few pixels per cell to resolve
+    kTooDark,           // underexposed: no separation to threshold
+    kTooBright,         // overexposed: the dark level is gone
+    kBlurred,           // resolvable pitch but the cell structure is not sharp
+    kReady,             // geometry is workable
+};
+
+[[nodiscard]] std::string_view AimVerdictName(AimVerdict v) noexcept;
+
+struct AimAdvice {
+    AimVerdict verdict = AimVerdict::kNoScreenFound;
+
+    // What was measured, so a caller can render a meter rather than only a sentence, and so a
+    // report carries the evidence for its own conclusion.
+    double lit_fraction = 0.0;       // share of the frame above the threshold
+    int bbox_x = 0, bbox_y = 0, bbox_w = 0, bbox_h = 0;
+    bool clipped_left = false, clipped_top = false, clipped_right = false, clipped_bottom = false;
+    double mean_luminance = 0.0;
+    int threshold = 0;
+
+    // Estimated in-plane rotation, and the screen's true extent with the bounding-box inflation
+    // taken out. `px_per_cell` is the corrected figure -- the bounding box overstates the screen
+    // whenever it is rotated, so using the box directly would report a density the receiver does
+    // not actually have.
+    double rotation_deg = 0.0;
+    double px_per_cell = 0.0;
+    double bbox_inflation = 1.0;     // box area / screen area; 1.0 when square-on
+
+    // Fraction of interior pixels that are neither clearly dark nor clearly bright. High means the
+    // cell edges are smeared -- defocus, or a pitch below what the optics resolve.
+    double mid_fraction = 0.0;
+
+    // One imperative sentence for a user, naming the ACTION rather than the measurement.
+    std::string guidance;
+
+    [[nodiscard]] bool ready() const noexcept { return verdict == AimVerdict::kReady; }
+    [[nodiscard]] bool clipped() const noexcept {
+        return clipped_left || clipped_top || clipped_right || clipped_bottom;
+    }
+};
+
+// Absolute luminance guards, in 8-bit sensor counts.
+//
+// These are ABSOLUTE rather than relative because the failures they catch are absolute. A frame can
+// be perfectly bimodal and still useless: if the dark level has lifted to 150 the "dark" cells are
+// brighter than a correctly exposed bright cell, and the photometric field has no black reference
+// left to work from (F7 showed that a spatially varying black-level lift is what actually defeats a
+// threshold). Relative measures cannot see that, because the two levels are still separated.
+inline constexpr double kMinSeparation = 25.0;    // below this there is no two-level structure
+inline constexpr double kMinBrightLevel = 60.0;   // nothing bright enough to be a lit screen
+inline constexpr double kMaxDarkLevel = 140.0;    // the dark level has washed out
+
+struct AimConfig {
+    // Below this, no detector can work: the boundary ring is one cell wide, so at 3 px/cell the
+    // ring is 3 px and its own edges are indistinguishable from noise.
+    double min_px_per_cell = 4.0;
+    // Target for a comfortable margin on all four sides, as a fraction of the frame's short axis.
+    double target_margin = 0.06;
+    // Exposure guards. A frame with almost everything on one side of the threshold has no second
+    // level left to estimate, and the photometric field needs both (F7).
+    double min_bright_fraction = 0.10;
+    double max_bright_fraction = 0.80;
+    double max_mid_fraction = 0.45;
+    // Sampling stride for the threshold histogram. The full pass is for the bounding box; the
+    // threshold does not need every pixel and paying for it would put this out of reach of a
+    // per-frame preview.
+    int histogram_stride = 7;
+
+    [[nodiscard]] Status Validate() const noexcept;
+};
+
+// Analyse one frame and say what to do about it.
+//
+// Single pass for the bounding box plus a strided pass for the threshold, no allocation beyond the
+// advice string. Cheap enough to run on preview frames, which is the point: guidance that arrives
+// after the capture is guidance about a capture that already failed.
+[[nodiscard]] Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid,
+                                           AimConfig cfg = {});
+
+}  // namespace fileflow

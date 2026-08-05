@@ -43,6 +43,27 @@ import java.util.concurrent.TimeUnit
  */
 class CameraRecorder(private val context: Context) {
 
+    /**
+     * Facts about the transmitter and the physical rig that the receiver cannot observe.
+     *
+     * Defaults are the format's **sentinels**, not plausible values: a capture whose distance was
+     * never measured must not claim 30 cm (C17).
+     */
+    data class RigMetadata(
+        val senderModel: String = "",
+        val displayMode: String = "",
+        val gridCols: Int = 0,
+        val gridRows: Int = 0,
+        val modulationProfile: String = "",
+        val screenBrightness: Double = -1.0,
+        val distanceCm: Double = -1.0,
+        val angleDeg: Double = -1.0,
+        val ambientLux: Double = -1.0,
+        val motionCondition: String = "",
+        val payloadSha256: String = "",
+        val payloadBytes: Long = 0L,
+    )
+
     /** Everything one run produced. All of it observed, none of it requested. */
     data class Outcome(
         val cameraId: String,
@@ -55,6 +76,8 @@ class CameraRecorder(private val context: Context) {
         val reportedExposureNs: Long,
         val reportedIso: Int,
         val reportedFocusDistance: Float,
+        /** `LENS_INFO_MINIMUM_FOCUS_DISTANCE` in diopters — the closest the lens can focus. */
+        val minFocusDiopters: Float,
         val aeMode: Int,
         /** `SENSOR_FRAME_DURATION` as reported. The rate ceiling under manual sensor mode. */
         val reportedFrameDurationNs: Long,
@@ -130,6 +153,39 @@ class CameraRecorder(private val context: Context) {
         maxWidth: Int,
         notes: String,
         /**
+         * Focus, in reciprocal metres. **Negative means continuous autofocus.**
+         *
+         * 5.0 focuses at 20 cm, 3.33 at 30 cm. There is no safe fixed default: infinity is correct
+         * for a distant target and catastrophic for a screen at arm's length (F32).
+         */
+        focusDiopters: Float = -1f,
+        /**
+         * Exposure in nanoseconds, and ISO. Both **parameters, not constants**, because the right
+         * values depend entirely on what is being photographed and EXP-004/EXP-005 exist to choose
+         * them.
+         *
+         * The first values here — a quarter of the frame period at ISO 400 — were reasonable for a
+         * general scene and badly wrong for this one: a full-brightness OLED at close range came
+         * back at 66% bright against 9% dark, washed out well past the point where a threshold can
+         * separate two levels (F33). Pointing a camera at a light source is not the average case,
+         * and the average-case defaults flattered nothing.
+         *
+         * 0 means "derive from the frame period" (the old behaviour), so a sweep can vary one axis
+         * at a time.
+         */
+        exposureNs: Long = 0L,
+        iso: Int = DEFAULT_ISO,
+        /**
+         * What the TRANSMITTER is doing, and how the rig is arranged.
+         *
+         * None of this is discoverable from the receiver — the camera cannot know the grid it is
+         * looking at, and it certainly cannot know the distance. `ffreplay` REFUSES a bundle whose
+         * grid is unset (F29), so without this a capture is not decodable; and CAPTURE-HARNESS
+         * requires the rig figures because a capture whose conditions were not recorded is not
+         * evidence. Unset fields keep their sentinels rather than plausible defaults.
+         */
+        rig: RigMetadata = RigMetadata(),
+        /**
          * When false, frames are counted and timed but never written.
          *
          * This is the A/B that makes a low delivered rate ATTRIBUTABLE. Writing a 1920x1440 Y
@@ -139,6 +195,8 @@ class CameraRecorder(private val context: Context) {
          */
         writeFrames: Boolean = true,
     ): Outcome {
+        // `rig` carries the grid, and the grid decides which capture mode maximises px/cell, so it
+        // must be known before the mode is chosen.
         val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
         // Back camera. The front camera is not a candidate: it is lower resolution on every
@@ -153,7 +211,7 @@ class CameraRecorder(private val context: Context) {
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return failure("no stream configuration map", cameraId)
 
-        val size = pickSize(map, targetFps, maxWidth)
+        val size = pickSize(map, targetFps, maxWidth, rig.gridCols, rig.gridRows)
             ?: return failure("no YUV_420_888 size at <= $maxWidth px wide", cameraId)
 
         var thread: HandlerThread? = null
@@ -166,6 +224,7 @@ class CameraRecorder(private val context: Context) {
         var reportedExposure = -1L
         var reportedIso = -1
         var reportedFocus = -1f
+        val minFocus = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: -1f
         var aeMode = -1
         var reportedFrameDuration = -1L
         var edgeMode = -1
@@ -178,15 +237,26 @@ class CameraRecorder(private val context: Context) {
             val handler = Handler(thread.looper)
 
             val meta = CaptureMetadata(
+                senderModel = rig.senderModel,
                 receiverModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
                 osBuild = android.os.Build.FINGERPRINT,
                 appCommit = "see git; app ${versionName()}",
                 notes = notes,
+                displayMode = rig.displayMode,
+                gridCols = rig.gridCols,
+                gridRows = rig.gridRows,
+                modulationProfile = rig.modulationProfile,
+                screenBrightness = rig.screenBrightness,
                 cameraId = cameraId,
                 width = size.width,
                 height = size.height,
                 fps = targetFps.toDouble(),
-                motionCondition = "handheld/unspecified",
+                distanceCm = rig.distanceCm,
+                angleDeg = rig.angleDeg,
+                ambientLux = rig.ambientLux,
+                motionCondition = rig.motionCondition,
+                sourcePayloadSha256 = rig.payloadSha256,
+                sourcePayloadBytes = rig.payloadBytes,
             )
             recorder = Recorder.open(bundleDir, meta)
 
@@ -230,7 +300,28 @@ class CameraRecorder(private val context: Context) {
                 // Everything below exists so consecutive frames are photometrically comparable.
                 // Auto-anything re-tunes between frames, which moves the dark/bright references
                 // the photometric field (C09) is trying to estimate.
-                set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+                // Focus is the one manual setting that CANNOT have a fixed sensible default.
+                //
+                // The first two-device run captured with `LENS_FOCUS_DISTANCE = 0`, i.e. INFINITY,
+                // against a transmitting screen roughly 20 cm away — so every frame was recorded
+                // out of focus, and a failed decode would have looked like the grid being
+                // unresolvable rather than the lens being pointed at nothing (F32). Defocus and
+                // insufficient resolution both destroy high-spatial-frequency cell structure, and
+                // they are indistinguishable in a decode log.
+                //
+                // `focusDiopters < 0` means "let the camera decide": continuous AF runs even with
+                // manual exposure, since AF and AE are independent. That is the robust default,
+                // because it needs no knowledge of the rig geometry. A non-negative value is
+                // reciprocal metres (5.0 = 20 cm) and locks focus for the session, which is what a
+                // repeatable measurement wants once the distance IS known.
+                if (focusDiopters < 0f) {
+                    set(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+                    )
+                } else {
+                    set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+                }
                 set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
                 // OQ-016: vendor sharpening and denoise destroy high-spatial-frequency cell
                 // structure — the exact signal we are trying to read. Requested off; whether the
@@ -247,10 +338,20 @@ class CameraRecorder(private val context: Context) {
                     // Exposure one quarter of the frame period: short enough to limit temporal
                     // mixing across display states (the Pc term), long enough to keep SNR usable.
                     // EXP-004 picks the real value; this is a defensible starting point, not one.
-                    val exposure = (1_000_000_000L / targetFps) / 4
+                    val exposure =
+                        if (exposureNs > 0L) exposureNs else (1_000_000_000L / targetFps) / 4
                     set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure)
-                    set(CaptureRequest.SENSOR_SENSITIVITY, START_ISO)
-                    set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)  // 0 = infinity
+                    set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                    if (focusDiopters >= 0f) {
+                        // Clamped to what the lens can actually do. Requesting 10 diopters on a lens
+                        // whose minimum focus distance is 5 would otherwise be silently ignored, and
+                        // the read-back below is what proves which happened.
+                        val maxDiopters =
+                            chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+                        val want = if (maxDiopters > 0f) focusDiopters.coerceAtMost(maxDiopters)
+                                   else focusDiopters
+                        set(CaptureRequest.LENS_FOCUS_DISTANCE, want)
+                    }
 
                     // THE frame-rate control once AE is off, and the reason the first run of this
                     // recorder delivered 31 fps against a requested 60 (finding F28).
@@ -328,6 +429,7 @@ class CameraRecorder(private val context: Context) {
                 reportedExposureNs = reportedExposure,
                 reportedIso = reportedIso,
                 reportedFocusDistance = reportedFocus,
+                minFocusDiopters = minFocus,
                 aeMode = aeMode,
                 reportedFrameDurationNs = reportedFrameDuration,
                 edgeMode = edgeMode,
@@ -344,19 +446,44 @@ class CameraRecorder(private val context: Context) {
         get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(cap) == true
 
     /**
-     * Largest `YUV_420_888` size at or below [maxWidth] whose minimum frame duration supports
-     * [targetFps].
+     * The `YUV_420_888` size that maximises **resolvable pixels per cell** for the target grid.
      *
-     * Largest-that-fits rather than largest available: pixels per cell is what bounds resolvable
-     * grid density, so throwing resolution away costs density directly — but a size the sensor
-     * cannot clock at the target rate costs `Fd`, which is worse.
+     * NOT largest-by-area, which is what this did first and which is subtly wrong. Asked for a mode
+     * at or below 1920 wide, largest-area picked a **1920×1920** square sensor mode — and a square
+     * frame wastes most of its pixels on a portrait screen, delivering no more px/cell than
+     * 1920×1080 while costing 78% more bandwidth (F33).
+     *
+     * The criterion that actually matters: the screen is a rectangle of aspect `cols/rows`, and it
+     * must fit inside the frame **with margin** or the boundary ring is clipped and localisation
+     * fails outright. Given a mode `W×H` and a margin fraction `m`, the largest the screen's long
+     * axis can be is `m·min(W, H/r)` — so px/cell is that over `rows`. Maximising it weighs
+     * resolution and aspect together, which area alone cannot.
+     *
+     * Both orientations are considered, because the receiver can be rotated and the sensor's long
+     * axis may carry either screen axis.
      */
-    private fun pickSize(map: StreamConfigurationMap, targetFps: Int, maxWidth: Int): Size? {
+    private fun pickSize(
+        map: StreamConfigurationMap,
+        targetFps: Int,
+        maxWidth: Int,
+        cols: Int,
+        rows: Int,
+    ): Size? {
         val minDurationNs = 1_000_000_000L / targetFps
-        return map.getOutputSizes(ImageFormat.YUV_420_888)
+        val candidates = map.getOutputSizes(ImageFormat.YUV_420_888)
             ?.filter { it.width <= maxWidth }
             ?.filter { map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) <= minDurationNs }
-            ?.maxByOrNull { it.width.toLong() * it.height }
+            ?: return null
+        if (cols <= 0 || rows <= 0) return candidates.maxByOrNull { it.width.toLong() * it.height }
+
+        val r = cols.toDouble() / rows       // screen short : long
+        val margin = 0.85                    // must leave a visible ring of background on all sides
+        fun score(s: Size): Double {
+            val a = margin * minOf(s.width.toDouble(), s.height / r)
+            val b = margin * minOf(s.height.toDouble(), s.width / r)
+            return maxOf(a, b) / rows
+        }
+        return candidates.maxByOrNull { score(it) }
     }
 
     private fun openCamera(mgr: CameraManager, id: String, handler: Handler): CameraDevice? {
@@ -412,7 +539,7 @@ class CameraRecorder(private val context: Context) {
     ) = Outcome(
         cameraId = cameraId, size = size, requestedFps = fps, framesWritten = 0,
         duplicateFrames = 0, timestampsNs = LongArray(0), reportedExposureNs = -1,
-        reportedIso = -1, reportedFocusDistance = -1f, aeMode = -1,
+        reportedIso = -1, reportedFocusDistance = -1f, minFocusDiopters = -1f, aeMode = -1,
         reportedFrameDurationNs = -1L, edgeMode = -1,
         noiseReductionMode = -1, manualRequested = false, error = why, framesWereWritten = true,
     )
@@ -420,6 +547,12 @@ class CameraRecorder(private val context: Context) {
     companion object {
         private const val TAG = "FileFlow.Capture"
         private const val IMAGE_BUFFERS = 6
-        private const val START_ISO = 400
+
+        /**
+         * Low, deliberately. The subject is an emissive display at full brightness, not a room.
+         * ISO 400 overexposed it badly (F33), and overexposure destroys the dark level the
+         * photometric field needs to separate two states.
+         */
+        const val DEFAULT_ISO = 60
     }
 }

@@ -140,6 +140,11 @@ findings that would otherwise have to be rediscovered.
 | `tools/adapt_sweep.sh` | Code-rate ladder sweep plus the C14 controller's pick — reproduces EXP-023 (F20–F23) |
 | `tools/android_capture.sh` | Runs one on-device capture and reports what the camera **delivered** — EXP-007's verification half (F28). The `write` arm is the A/B that separates camera rate from writer I/O |
 | `tools/frame_cadence.py` | Modal-interval analysis of a capture's per-frame timestamps. Distinguishes a slow sensor from a fast one whose frames are dropped (F28) |
+| `tools/android_transmit.sh` | Runs one on-device transmit and reports states **submitted** (an upper bound on `Fd`, never `Fd` itself) |
+| `tools/android_probe.sh` · `tools/android_link.sh` · `tools/android_aim.sh` | Probe one device; run a two-device link; fast (~20 s) aiming iteration |
+| `tools/android_pull_bundle.sh` | Pulls a capture bundle off a device and decodes it through `ffreplay` |
+| `tools/verify_tx_screenshot.py` | Asserts a transmitter screenshot really contains an optical frame — integer pitch, bright ring, two-level interior, exact `GL_NEAREST` upscale (F31) |
+| `tools/frame_framing.py` | Rig diagnostic: clipping, inferred rotation, exposure balance and px/cell from one captured frame (F33) |
 | `tools/check_links.py` | Link checker for every relative link in the docs tree |
 | `data/experiments/` | Raw and processed experimental results. **Append-only** |
 | [`data/experiments/EXP-023/RESULTS.md`](../data/experiments/EXP-023/RESULTS.md) | EXP-023 conclusions: C14 code-rate selection, and the cost of guessing wrong |

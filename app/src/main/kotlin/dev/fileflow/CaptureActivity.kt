@@ -40,6 +40,16 @@ class CaptureActivity : AppCompatActivity() {
             setPadding(24, 24, 24, 24)
             setTextIsSelectable(true)
         }
+        // Turn the screen on and show over the keyguard.
+        //
+        // Not convenience: Android REFUSES camera access to a background process, and an activity
+        // launched by `am start` onto a locked device never reaches the foreground. The first
+        // two-device attempt failed with CAMERA_DISABLED ("cannot open camera from background") for
+        // exactly this reason, and on the transmitter side a locked screen displays nothing at all.
+        // A test rig that depends on someone having left both phones unlocked is not a rig.
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+
         setContentView(ScrollView(this).apply { addView(text) })
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -80,7 +90,36 @@ class CaptureActivity : AppCompatActivity() {
         // difference between the arms is what makes a low delivered rate attributable to the
         // writer rather than to the sensor.
         val writeFrames = intent.getBooleanExtra("write", true)
+        // Negative = continuous autofocus, which is the right default because it needs no knowledge
+        // of the rig. Positive = reciprocal metres, locked (5.0 = 20 cm).
+        val focusDiopters = intent.getFloatExtra("focusDiopters", -1f)
+        // 0 = derive from the frame period. Exposed so EXP-004/EXP-005 can sweep one axis at a time.
+        val exposureNs = intent.getLongExtra("exposureNs", 0L)
+        val iso = intent.getIntExtra("iso", CameraRecorder.DEFAULT_ISO)
 
+        // Transmitter and rig facts, passed in because the receiver cannot discover them. `ffreplay`
+        // refuses a bundle with no grid (F29), so `gridCols`/`gridRows` are what make a capture
+        // decodable at all.
+        val rig = CameraRecorder.RigMetadata(
+            senderModel = intent.getStringExtra("senderModel") ?: "",
+            displayMode = intent.getStringExtra("displayMode") ?: "",
+            gridCols = intent.getIntExtra("gridCols", 0),
+            gridRows = intent.getIntExtra("gridRows", 0),
+            modulationProfile = intent.getStringExtra("profile") ?: "",
+            screenBrightness = intent.getDoubleExtra("brightness", -1.0),
+            distanceCm = intent.getDoubleExtra("distanceCm", -1.0),
+            angleDeg = intent.getDoubleExtra("angleDeg", -1.0),
+            ambientLux = intent.getDoubleExtra("ambientLux", -1.0),
+            motionCondition = intent.getStringExtra("motion") ?: "",
+            payloadSha256 = intent.getStringExtra("payloadSha256") ?: "",
+            payloadBytes = intent.getLongExtra("payloadBytes", 0L),
+        )
+
+        rigEcho = if (rig.gridCols > 0 && rig.gridRows > 0) {
+            "${rig.gridCols}x${rig.gridRows} from ${rig.senderModel.ifEmpty { "(sender unrecorded)" }}"
+        } else {
+            "(unset — ffreplay will refuse this bundle)"
+        }
         show("capturing $frames frames at $fps fps (max width $maxWidth, write=$writeFrames)…")
 
         // Off the main thread: the capture blocks, and a frozen UI thread would also stall the
@@ -95,12 +134,18 @@ class CaptureActivity : AppCompatActivity() {
                 maxWidth = maxWidth,
                 notes = notes,
                 writeFrames = writeFrames,
+                focusDiopters = focusDiopters,
+                exposureNs = exposureNs,
+                iso = iso,
+                rig = rig,
             )
             val report = format(outcome, dir)
             runOnUiThread { show(report) }
             emit(report, outcome)
         }.start()
     }
+
+    private var rigEcho: String = "(unset — ffreplay will refuse this bundle)"
 
     private fun format(o: CameraRecorder.Outcome, dir: File): String = buildString {
         appendLine("FileFlow capture run (C05 CPU path) — EXP-007 verification half")
@@ -114,6 +159,7 @@ class CaptureActivity : AppCompatActivity() {
         appendLine()
 
         appendLine("REQUESTED")
+        appendLine("  grid (from TX)   ${rigEcho}")
         appendLine("  camera           ${o.cameraId}")
         appendLine("  size             ${o.size.width}x${o.size.height}")
         appendLine("  fps              ${o.requestedFps}")
@@ -141,7 +187,14 @@ class CaptureActivity : AppCompatActivity() {
         appendLine("  manual requested ${o.manualRequested}")
         appendLine("  exposure         ${o.reportedExposureNs} ns")
         appendLine("  ISO              ${o.reportedIso}")
-        appendLine("  focus distance   ${o.reportedFocusDistance}")
+        appendLine("  focus distance   ${o.reportedFocusDistance} diopters" +
+                   if (o.reportedFocusDistance > 0f) {
+                       "  => ${"%.1f".format(100f / o.reportedFocusDistance)} cm"
+                   } else if (o.reportedFocusDistance == 0f) "  => INFINITY" else "")
+        appendLine("  lens min focus   ${o.minFocusDiopters} diopters" +
+                   if (o.minFocusDiopters > 0f) {
+                       "  => closest ${"%.1f".format(100f / o.minFocusDiopters)} cm"
+                   } else "")
         appendLine("  AE mode          ${o.aeMode}  (0 = OFF, i.e. manual honoured)")
         appendLine("  frame duration   ${o.reportedFrameDurationNs} ns" +
                    if (o.reportedFrameDurationNs > 0) {

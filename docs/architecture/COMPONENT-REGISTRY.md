@@ -469,6 +469,28 @@ solved, delivery is not. **OQ-037** — decoupling the fountain symbol size from
 which is what blocks actuation before the one-way link even becomes the problem. **OQ-036** —
 the thermal policy this component is specified to have and deliberately does not.
 
+## C02a — Aiming analysis (shared receiver-side geometry advisor)
+> **Status 2026-08-04: IMPLEMENTED** (`core/src/framing.cpp`, `AnalyseAim`; 11 tests).
+> Not in the original registry; added when five consecutive hardware framing failures all reported
+> the same useless decode line (F33).
+>
+> **Responsibility.** From one luminance frame, decide whether the geometry is workable and, if not,
+> say what the user should change. Deliberately **not** a detector: it never looks for corners, fits a
+> homography or reads a cell.
+>
+> **Why it is portable C++ rather than Kotlin** (ADR-0014): it is real logic with real edge cases —
+> Otsu class means, rotation recovery from a bounding box, an ordered verdict — and it has to be
+> testable off-device. Two of its own defects produced *confident wrong advice* rather than errors, and
+> both were caught by desktop tests, not on a phone (F33).
+>
+> **The ordering is the design.** Verdicts run no-screen → clipped → too-far → exposure → blur, because
+> a clipped screen reports a perfectly healthy px/cell over its visible part, and acting on density
+> first sends the user the wrong way.
+>
+> **Rotation is reported, never complained about.** Roll decodes to at least 40° (F32). The advice for
+> a tilted screen is that its bounding box needs more room — 2.24× the screen's area at 35° — not that
+> it should be straightened.
+
 ## C15 — Benchmark and telemetry system
 **Responsibility.** Collect, aggregate and persist every metric in the benchmark
 methodology; make goodput computations reproducible.

@@ -372,6 +372,17 @@ session unless the user explicitly enables capture recording.
 
 ### UI-01 — File selection and transfer initiation · **Phase.** 3 · **P0** · C01 · Planned
 ### UI-02 — Aiming and alignment guidance
+**Status.** **Analysis IMPLEMENTED** (`core/src/framing.cpp`, `AnalyseAim`, 11 tests); the on-device
+UI that surfaces it is outstanding.
+**Why it became urgent.** Getting two real phones into a decodable geometry took five iterations, and
+every failure reported the same line — "geometry failures 20 of 20" — while the actual causes were a
+locked screen, focus at infinity, gross overexposure, a square sensor mode, and a clipped screen
+(F33). A user has strictly less information than that, so the receiver has to diagnose its own aim.
+**Design note.** Verdicts are ordered by *what to fix first*, and clipping is checked **before**
+density: a clipped screen has a healthy measured px/cell over the part that is visible, so
+density-first reasoning says "move closer" when the fix is "move back".
+**It does not tell users to stop rotating.** Roll is tolerated to at least 40° (F32); rotation costs
+framing, not decoding, so the advice for a tilted screen is that it needs more room in view.
 **Description.** Help the user frame the transmitting screen; show lock status and quality.
 **Value.** Acquisition time is dead time in the goodput denominator.
 **Phase.** 4 · **P1** · Planned
