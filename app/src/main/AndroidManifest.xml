@@ -19,8 +19,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
 
+        <!-- The front door.
+             Until this existed every screen was reachable only through `adb shell am start`, and
+             the launcher opened the capability probe. A person holding the phone therefore got a
+             wall of diagnostics and no route to the transmitter, the receiver or the aiming help. -->
         <activity
-            android:name=".ProbeActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden">
@@ -30,24 +34,24 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <!-- The capture run (C05 CPU path, EXP-007's verification half). Exported so a run is
              scriptable from adb with its parameters as extras: a measurement whose parameters
-             live in someone's memory rather than in its report is not reproducible. -->
+             live in someone's memory rather than in its report is not reproducible.
+             Aims first by default; scripted runs pass `aim false`. -->
         <activity
             android:name=".CaptureActivity"
             android:exported="true"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
-        <!-- The transmitter (C03). Fullscreen, portrait-locked and orientation-change-proof: a
-             re-layout mid-run would resize the surface and change the cell pitch, which the
-             receiver would see as the geometry moving under it.
-
-             `configChanges` deliberately includes `screenSize` so the activity is NOT recreated on
-             a configuration change; ADR-0004 requires the surface stay at native resolution with no
-             scaling for the whole session. -->
-        <!-- Live aiming guidance (UI-02). Exported so a session is scriptable, and
-             portrait-locked because the schematic assumes a fixed screen orientation. -->
+        <!-- Live aiming guidance (UI-02), standalone. Portrait-locked because the schematic
+             assumes a fixed screen orientation. -->
         <activity
             android:name=".AimActivity"
             android:exported="true"
@@ -55,6 +59,11 @@
             android:theme="@style/Theme.AppCompat.NoActionBar"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- The transmitter (C03). Fullscreen and portrait-locked: a re-layout mid-run would
+             resize the surface and change the cell pitch, which the receiver would see as the
+             geometry moving under it.
+             `configChanges` deliberately includes `screenSize` so the activity is NOT recreated on
+             a configuration change, because the surface must stay put for the whole session. -->
         <activity
             android:name=".TransmitActivity"
             android:exported="true"

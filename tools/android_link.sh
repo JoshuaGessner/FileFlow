@@ -90,7 +90,7 @@ rx shell "am start -n dev.fileflow/.CaptureActivity \
     --ed distanceCm $DISTANCE_CM --ed angleDeg $ANGLE_DEG \
     --es motion 'rigid/propped' \
     --el payloadBytes $PAYLOAD \
-    --es notes '$NOTES'" >/dev/null 2>&1
+    --ez aim false --es notes '$NOTES'" >/dev/null 2>&1
 
 for _ in $(seq 1 90); do
     sleep 2

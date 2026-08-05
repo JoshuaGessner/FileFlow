@@ -2,11 +2,18 @@ package dev.fileflow
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
+import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import dev.fileflow.aim.AimAnalyser
+import dev.fileflow.aim.AimVerdict
+import dev.fileflow.aim.AimView
 import dev.fileflow.capture.CameraRecorder
 import java.io.File
 
@@ -31,26 +38,35 @@ import java.io.File
 class CaptureActivity : AppCompatActivity() {
 
     private lateinit var text: TextView
+    private var aimView: AimView? = null
+    private var aimRecorder: CameraRecorder? = null
+    private var aimThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         text = TextView(this).apply {
             typeface = android.graphics.Typeface.MONOSPACE
-            textSize = 11f
-            setPadding(24, 24, 24, 24)
+            // Legible at arm's length on a phone. The first version was 11sp monospace on the default
+            // LIGHT theme, which is what an operator actually saw while trying to line up a camera
+            // during a two-device run: a wall of small text and no aiming help at all.
+            textSize = 13f
+            setTextColor(Color.parseColor("#CFD8DC"))
+            setPadding(28, 28, 28, 28)
             setTextIsSelectable(true)
         }
-        // Turn the screen on and show over the keyguard.
+
+        // Keep the receiver's screen awake for the whole run.
         //
-        // Not convenience: Android REFUSES camera access to a background process, and an activity
-        // launched by `am start` onto a locked device never reaches the foreground. The first
-        // two-device attempt failed with CAMERA_DISABLED ("cannot open camera from background") for
-        // exactly this reason, and on the transmitter side a locked screen displays nothing at all.
-        // A test rig that depends on someone having left both phones unlocked is not a rig.
+        // `setShowWhenLocked`/`setTurnScreenOn` are kept because camera access IS refused to a
+        // background process, and an early two-device attempt failed with CAMERA_DISABLED
+        // ("cannot open camera from background", proc state 20). What that proves is only that the
+        // app was not foreground -- the original comment here asserted a LOCKED SCREEN was the
+        // cause, which was never verified, and the operator reports both phones were unlocked. Two
+        // fixes were applied at once (these flags and a wake/dismiss-keyguard step in the script), so
+        // which one mattered is genuinely unknown. Kept as cheap insurance, not as a diagnosis.
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-
-        setContentView(ScrollView(this).apply { addView(text) })
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
@@ -59,10 +75,83 @@ class CaptureActivity : AppCompatActivity() {
             // permission is pre-granted with `adb shell pm grant`, which avoids a UI tap standing
             // between us and a measurement.
             requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
-            show("waiting for CAMERA permission…")
+            showReport("Waiting for camera permission…")
             return
         }
-        start()
+        begin()
+    }
+
+    /**
+     * Aim first when asked to, then record.
+     *
+     * Guidance before capture is the whole point: six consecutive hardware failures were framing or
+     * exposure problems (F33, F34), and a capture taken before the geometry is workable produces a
+     * dataset that cannot be decoded and cannot say why. Scripted runs pass `--ez aim false` because
+     * they are driven by a rig that is already set up.
+     */
+    private fun begin() {
+        if (intent.getBooleanExtra("aim", false)) startAiming() else start()
+    }
+
+    private fun startAiming() {
+        val cols = intent.getIntExtra("gridCols", 120)
+        val rows = intent.getIntExtra("gridRows", 260)
+        val v = AimView(this, cols, rows)
+        aimView = v
+        v.setBanner("Lining up — recording starts when this is steady")
+        setContentView(FrameLayout(this).apply { addView(v) })
+
+        val analyser = AimAnalyser()
+        val rec = CameraRecorder(this)
+        aimRecorder = rec
+        var readyStreak = 0
+        var lastMs = 0L
+        var handedOver = false
+
+        aimThread = Thread {
+            rec.record(
+                bundleDir = "${filesDir.absolutePath}/aim-discard",
+                frameCount = 0,
+                targetFps = 30,
+                maxWidth = intent.getIntExtra("maxWidth", 1920),
+                notes = "aiming — not a dataset",
+                writeFrames = false,
+                rig = CameraRecorder.RigMetadata(gridCols = cols, gridRows = rows),
+                onFrame = { buf, w, h, stride ->
+                    val now = System.currentTimeMillis()
+                    if (!handedOver && now - lastMs >= AIM_INTERVAL_MS) {
+                        lastMs = now
+                        val aim = analyser.analyse(buf, w, h, stride, cols, rows)
+                        if (aim != null) {
+                            // Require a STREAK rather than a single good frame. One Ready verdict
+                            // between two bad ones is exactly what the Ready/TooDark oscillation
+                            // looks like when the exposure window lands in the panel's blanking
+                            // interval, and starting a capture on it would record the bad half.
+                            readyStreak = if (aim.verdict == AimVerdict.Ready) readyStreak + 1 else 0
+                            val left = (READY_STREAK - readyStreak).coerceAtLeast(0)
+                            runOnUiThread {
+                                v.update(aim, w, h)
+                                v.setBanner(
+                                    if (aim.verdict == AimVerdict.Ready) {
+                                        "Steady — starting in $left…"
+                                    } else "Lining up — recording starts when this is steady"
+                                )
+                            }
+                            if (readyStreak >= READY_STREAK) {
+                                handedOver = true
+                                rec.cancel()
+                            }
+                        }
+                    }
+                },
+            )
+            if (handedOver) {
+                runOnUiThread {
+                    aimView?.setBanner("Recording…")
+                    start()
+                }
+            }
+        }.also { it.start() }
     }
 
     override fun onRequestPermissionsResult(
@@ -74,9 +163,9 @@ class CaptureActivity : AppCompatActivity() {
         if (requestCode == REQ_CAMERA &&
             grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
         ) {
-            start()
+            begin()
         } else {
-            show("CAMERA permission denied — nothing can be measured without it")
+            showReport("Camera permission denied — nothing can be measured without it.")
         }
     }
 
@@ -120,7 +209,10 @@ class CaptureActivity : AppCompatActivity() {
         } else {
             "(unset — ffreplay will refuse this bundle)"
         }
-        show("capturing $frames frames at $fps fps (max width $maxWidth, write=$writeFrames)…")
+        aimView?.setBanner("Recording $frames frames…")
+        if (aimView == null) {
+            showReport("Capturing $frames frames at $fps fps (max width $maxWidth)…")
+        }
 
         // Off the main thread: the capture blocks, and a frozen UI thread would also stall the
         // callbacks it is waiting for.
@@ -140,7 +232,7 @@ class CaptureActivity : AppCompatActivity() {
                 rig = rig,
             )
             val report = format(outcome, dir)
-            runOnUiThread { show(report) }
+            runOnUiThread { showReport(report) }
             emit(report, outcome)
         }.start()
     }
@@ -237,7 +329,23 @@ class CaptureActivity : AppCompatActivity() {
         }
     }
 
-    private fun show(s: String) { text.text = s }
+    /** Swap to the report view. Dark and readable, because it is read on a phone in a room. */
+    private fun showReport(s: String) {
+        text.text = s
+        setContentView(
+            ScrollView(this).apply {
+                setBackgroundColor(Color.parseColor("#101418"))
+                addView(text)
+            }
+        )
+        aimView = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        aimRecorder?.cancel()
+        aimThread?.join(2000)
+    }
 
     companion object {
         const val LOG_TAG = "FileFlow.Capture"
@@ -245,5 +353,8 @@ class CaptureActivity : AppCompatActivity() {
         const val REPORT_FILE = "capture-report.txt"
         const val FRAMES_CSV = "capture-frames.csv"
         private const val REQ_CAMERA = 1
+        private const val AIM_INTERVAL_MS = 150L
+        /** Consecutive Ready verdicts before recording starts. See the note in [startAiming]. */
+        private const val READY_STREAK = 6
     }
 }

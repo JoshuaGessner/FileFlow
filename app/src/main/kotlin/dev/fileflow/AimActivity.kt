@@ -13,9 +13,9 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import dev.fileflow.aim.Aim
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
+import dev.fileflow.aim.AimView
 import dev.fileflow.capture.CameraRecorder
 
 /**
@@ -161,140 +161,5 @@ class AimActivity : AppCompatActivity() {
         private const val TAG = "FileFlow.Aim"
         private const val REQ_CAMERA = 2
         private const val ANALYSE_INTERVAL_MS = 150L  // ~6 verdicts a second
-    }
-}
-
-/**
- * Draws the frame, the detected screen inside it, and the guidance.
- *
- * The colour is the verdict, so the state is readable at arm's length without reading words — which
- * is the situation a user is actually in while holding two phones.
- */
-private class AimView(context: Context, private val cols: Int, private val rows: Int) :
-    View(context) {
-
-    private var aim: Aim? = null
-    private var frameW = 0
-    private var frameH = 0
-    private var message: String? = "Starting camera…"
-
-    private val framePaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 4f
-        color = Color.DKGRAY
-        isAntiAlias = true
-    }
-    private val screenPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
-    private val edgePaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 12f
-        color = Color.RED
-        isAntiAlias = true
-    }
-    private val bigText = Paint().apply {
-        color = Color.WHITE
-        textSize = 54f
-        isAntiAlias = true
-        isFakeBoldText = true
-    }
-    private val smallText = Paint().apply { color = Color.LTGRAY; textSize = 32f; isAntiAlias = true }
-
-    fun setMessage(m: String) {
-        message = m
-        aim = null
-        postInvalidate()
-    }
-
-    fun update(a: Aim, w: Int, h: Int) {
-        aim = a
-        frameW = w
-        frameH = h
-        message = null
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(Color.BLACK)
-        val a = aim
-        if (a == null) {
-            canvas.drawText(message ?: "", 40f, height / 2f, bigText)
-            return
-        }
-
-        // Lay the camera frame out landscape-in-portrait, top half of the screen.
-        val pad = 40f
-        val availW = width - 2 * pad
-        val availH = height * 0.52f - 2 * pad
-        val scale = minOf(availW / frameW.coerceAtLeast(1), availH / frameH.coerceAtLeast(1))
-        val fw = frameW * scale
-        val fh = frameH * scale
-        val fx = (width - fw) / 2f
-        val fy = pad
-
-        canvas.drawRect(fx, fy, fx + fw, fy + fh, framePaint)
-
-        // The detected screen, coloured by verdict.
-        screenPaint.color = when (a.verdict) {
-            AimVerdict.Ready -> Color.parseColor("#2E7D32")
-            AimVerdict.Clipped -> Color.parseColor("#C62828")
-            AimVerdict.TooFar, AimVerdict.NoScreenFound -> Color.parseColor("#455A64")
-            AimVerdict.TooBright, AimVerdict.TooDark -> Color.parseColor("#EF6C00")
-            AimVerdict.Blurred -> Color.parseColor("#6A1B9A")
-            AimVerdict.Unknown -> Color.DKGRAY
-        }
-        if (a.bboxW > 0 && a.bboxH > 0) {
-            canvas.drawRect(
-                fx + a.bboxX * scale, fy + a.bboxY * scale,
-                fx + (a.bboxX + a.bboxW) * scale, fy + (a.bboxY + a.bboxH) * scale,
-                screenPaint,
-            )
-        }
-
-        // Mark the offending edges. This is the single most actionable thing on screen: it names
-        // which way to move, which a decode log never could.
-        if (a.clippedTop) canvas.drawLine(fx, fy, fx + fw, fy, edgePaint)
-        if (a.clippedBottom) canvas.drawLine(fx, fy + fh, fx + fw, fy + fh, edgePaint)
-        if (a.clippedLeft) canvas.drawLine(fx, fy, fx, fy + fh, edgePaint)
-        if (a.clippedRight) canvas.drawLine(fx + fw, fy, fx + fw, fy + fh, edgePaint)
-
-        // Guidance, wrapped by hand — a sentence is more useful than a code, and it must not run off.
-        var ty = fy + fh + 80f
-        for (line in wrap(a.guidance, 34)) {
-            canvas.drawText(line, pad, ty, bigText)
-            ty += 62f
-        }
-
-        ty += 24f
-        // The evidence behind the verdict. Kept visible because a user who can see px/cell rise as
-        // they move learns the rig far faster than one shown only a red light.
-        val facts = listOf(
-            "grid ${cols}x$rows   frame ${frameW}x$frameH",
-            "px/cell %.1f   rotation %.0f°".format(a.pxPerCell, a.rotationDeg),
-            "screen %.0f%% of frame   mid %.2f".format(a.litFraction * 100.0, a.midFraction),
-            "mean luminance %.0f   threshold %d".format(a.meanLuminance, a.threshold),
-            if (a.bboxInflation > 1.15) {
-                "tilt costs %.2fx the frame area it needs".format(a.bboxInflation)
-            } else "",
-        )
-        for (f in facts) {
-            if (f.isEmpty()) continue
-            canvas.drawText(f, pad, ty, smallText)
-            ty += 42f
-        }
-    }
-
-    private fun wrap(s: String, width: Int): List<String> {
-        val out = ArrayList<String>()
-        var line = StringBuilder()
-        for (word in s.split(' ')) {
-            if (line.isNotEmpty() && line.length + 1 + word.length > width) {
-                out.add(line.toString())
-                line = StringBuilder()
-            }
-            if (line.isNotEmpty()) line.append(' ')
-            line.append(word)
-        }
-        if (line.isNotEmpty()) out.add(line.toString())
-        return out
     }
 }

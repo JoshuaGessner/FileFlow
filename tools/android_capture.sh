@@ -49,7 +49,7 @@ fi
 "$ADB" logcat -c
 "$ADB" shell "am start -n dev.fileflow/.CaptureActivity \
     --ei frames $FRAMES --ei fps $FPS --ei maxWidth $MAXW \
-    --ez write $WRITE --es notes '$NOTES'" 2>&1 | tail -1
+    --ez write $WRITE --ez aim false --es notes '$NOTES'" 2>&1 | tail -1
 
 for _ in $(seq 1 60); do
     sleep 2
