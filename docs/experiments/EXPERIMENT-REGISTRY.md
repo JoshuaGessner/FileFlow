@@ -159,11 +159,33 @@ whether milestone 6 is testable at all on the available hardware.
 >    5 px/cell at the 144×240 charter grid. On the high-rate path the receiver, not the panel,
 >    bounds density (F27).
 
-**Conclusion.** Enumeration done; verification outstanding. · **Confidence.** High for what the
-device *advertises*; **none** for what it delivers.
-**Follow-up.** Run the verification half against the recorder (C05): capture a known counting
-pattern at 60 fps CPU and 240 fps high-speed, and measure the distinct-frame fraction. That run
-also supplies the rolling-shutter skew the probe structurally cannot (F25).
+> **VERIFICATION HALF, CPU PATH ONLY — 2026-08-04** (findings F28, F29). Raw:
+> `data/experiments/EXP-007/raw/capture-cpu-path-SM-S948U1-20260804.md`. Reproduce with
+> `tools/android_capture.sh` and `tools/frame_cadence.py`.
+>
+> - **The CPU path delivers 59.04 of a requested 60 fps at 1920×1440**, measured with disk writes
+>   disabled. OQ-001 is answered for this device: 60 fps CPU-readable `YUV_420_888` is real, not
+>   just advertised.
+> - **Frames are genuinely distinct: 0 duplicates in 600 written frames.** A duplicate is a frame
+>   byte-identical to its predecessor, which sensor noise makes a decisive test. This does **not**
+>   cover the 240 fps high-speed path, where the duplication risk actually sits.
+> - **Manual control is honoured.** Exposure exact, ISO quantised 400→398, AE/EDGE/NOISE_REDUCTION
+>   all reported OFF as requested. RISK-011 does not bite on this device for these controls —
+>   which is worth recording precisely because the risk register expects the opposite.
+> - **The recorder, not the camera, was the limit**: 32 fps with writes on versus 59 with them
+>   off, at 2.76 MB/frame. The sensor's modal interval is 16.66 ms (60.02 fps) with 17 single-frame
+>   drops. See F28; it bounds the *harness*, not the link.
+>
+> **Still outstanding, and it is the part that gates milestone 6:** the 240 fps constrained
+> high-speed arm, which needs a `SurfaceTexture` path because such a session rejects `ImageReader`
+> `[FACT]`. Nothing here tests it.
+
+**Conclusion.** CPU path verified (60 fps, distinct frames, manual control honoured); high-speed
+path untested. · **Confidence.** High for the CPU path on this device, from a single run per arm;
+**none** for the ≥120 fps path.
+**Follow-up.** Build the `SurfaceTexture` high-speed arm and re-run the distinctness test at
+240 fps. Separately, a capture run supplies the rolling-shutter skew the probe structurally cannot
+(F25), and that has not been collected yet.
 **Why it matters.** Determines a large implementation fork (ADR-0005) and whether
 milestone 6 has any evidence behind it. **Should run early.**
 

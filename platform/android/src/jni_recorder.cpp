@@ -40,7 +40,39 @@ struct RecorderHandle {
     fileflow::harness::CaptureWriter writer;
     std::uint32_t width;
     std::uint32_t height;
+
+    // Duplicate-delivery detection. THE reason this exists: the camera research notes warn that
+    // a high-speed session may return the same sensor frame more than once, and that a duplicate
+    // is *not* detectable from timestamps -- repeated buffers still carry distinct ones. So the
+    // only sound test is whether the pixels changed.
+    //
+    // Sensor noise makes this decisive rather than approximate. Two genuinely distinct exposures
+    // of even a perfectly static scene differ in a large fraction of their bytes, because read
+    // and shot noise are per-exposure. A byte-identical frame is therefore a repeated buffer, not
+    // a coincidence -- which means duplication can be measured with NO transmitter, no known
+    // pattern, and nothing pointed at the camera. That is what makes EXP-007's distinctness half
+    // runnable before any optical link exists.
+    std::uint64_t prev_hash = 0;
+    bool have_prev = false;
+    std::uint32_t duplicate_frames = 0;
+    std::uint64_t last_hash = 0;
 };
+
+// FNV-1a over the packed Y plane. Not cryptographic and does not need to be: it is comparing a
+// frame against its immediate predecessor, where the adversary is a driver quirk rather than an
+// attacker. Walks the rows honouring stride, so padding never enters the hash and a stride change
+// cannot masquerade as a content change.
+std::uint64_t HashYPlane(const std::uint8_t* base, int width, int height, int row_stride) {
+    std::uint64_t h = 1469598103934665603ULL;
+    for (int y = 0; y < height; ++y) {
+        const std::uint8_t* row = base + static_cast<std::ptrdiff_t>(y) * row_stride;
+        for (int x = 0; x < width; ++x) {
+            h ^= row[x];
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
 
 RecorderHandle* FromJLong(jlong h) { return reinterpret_cast<RecorderHandle*>(h); }
 
@@ -155,6 +187,18 @@ Java_dev_fileflow_capture_NativeRecorder_writeFrame(JNIEnv* env, jclass /*unused
     // bundle lands tightly packed and the driver's stride never reaches the file.
     const fileflow::ImageView8 img(base, width, height, row_stride);
     const fileflow::Status s = h->writer.WriteFrame(img);
+
+    // Hashed after the write so a frame the writer refused never counts as delivered. This is a
+    // second pass over the plane, which is a real cost on the per-frame path and is accepted
+    // deliberately: it is only paid during a RECORDING run, where there is no decode competing
+    // for the CPU, and the number it produces gates milestone 6.
+    if (s.ok()) {
+        const std::uint64_t hash = HashYPlane(base, width, height, row_stride);
+        if (h->have_prev && hash == h->prev_hash) ++h->duplicate_frames;
+        h->prev_hash = hash;
+        h->last_hash = hash;
+        h->have_prev = true;
+    }
     return static_cast<jint>(s.error());
 }
 
@@ -172,6 +216,26 @@ Java_dev_fileflow_capture_NativeRecorder_framesWritten(JNIEnv* /*env*/, jclass /
                                                         jlong handle) {
     RecorderHandle* h = FromJLong(handle);
     return h != nullptr ? static_cast<jint>(h->writer.frames_written()) : -1;
+}
+
+// Frames byte-identical to their immediate predecessor. Reported separately from the frame
+// count because a session delivering 240 buffers/s of which half are repeats has an effective
+// rate of 120, and quoting 240 would be exactly the kind of unlabelled number ADR-0012 forbids.
+JNIEXPORT jint JNICALL
+Java_dev_fileflow_capture_NativeRecorder_duplicateFrames(JNIEnv* /*env*/, jclass /*unused*/,
+                                                          jlong handle) {
+    RecorderHandle* h = FromJLong(handle);
+    return h != nullptr ? static_cast<jint>(h->duplicate_frames) : -1;
+}
+
+// The most recent frame's hash, so the caller can log a per-frame trace and find WHERE the
+// duplicates cluster. A duplicate every other frame means a rate lie; a burst of them means a
+// stall, and those call for different fixes.
+JNIEXPORT jlong JNICALL
+Java_dev_fileflow_capture_NativeRecorder_lastFrameHash(JNIEnv* /*env*/, jclass /*unused*/,
+                                                        jlong handle) {
+    RecorderHandle* h = FromJLong(handle);
+    return h != nullptr ? static_cast<jlong>(h->last_hash) : 0;
 }
 
 JNIEXPORT void JNICALL

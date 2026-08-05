@@ -29,5 +29,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The capture run (C05 CPU path, EXP-007's verification half). Exported so a run is
+             scriptable from adb with its parameters as extras: a measurement whose parameters
+             live in someone's memory rather than in its report is not reproducible. -->
+        <activity
+            android:name=".CaptureActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

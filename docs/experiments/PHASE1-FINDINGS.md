@@ -1151,6 +1151,118 @@ modes" to "we are offered them; do they deliver?", which is EXP-007's verificati
 
 ---
 
+## F28 — The recorder was the bottleneck, not the camera, and only an A/B could tell `[FACT]`
+
+**Found:** 2026-08-04, first run of the C05 CPU-path recorder on an SM-S948U1. Raw:
+`data/experiments/EXP-007/raw/capture-cpu-path-SM-S948U1-20260804.md`.
+
+Requested 60 fps at 1920×1440. Got **32.11 fps**. The obvious conclusion — that the device cannot
+sustain 60 fps and F27's advertised figure is another vendor overstatement — would have been
+**wrong**, and it would have been the third time this project measured its own bug and drew a
+conclusion about the world from it (F14, F15).
+
+### Two of my own defects came first
+
+**The rate control was never set.** `CONTROL_AE_TARGET_FPS_RANGE` is an *auto-exposure* control.
+With `CONTROL_AE_MODE_OFF` — which the recorder sets deliberately, so consecutive frames stay
+photometrically comparable — the AE routine is not running and nothing consumes the range. Under
+manual sensor control the period is set by **`SENSOR_FRAME_DURATION`**, which was absent. It does
+not fail loudly; it silently produces the wrong rate, which looks exactly like a device that
+cannot hit the rate. After setting it, `CaptureResult` reports 16,658,337 ns — a 60.03 fps ceiling
+— so the camera was configured correctly and *still* delivered 32.
+
+**The test harness reported a stale run.** The first re-run printed a byte-identical report,
+timestamp included, because the script waited for the report file to *exist* and it already did
+from the previous run. Fixed by deleting the report first and refusing to launch if the delete
+fails. A measurement harness that can silently report the previous measurement is worse than no
+harness.
+
+### The A/B that settled it
+
+Identical camera configuration; the only variable is whether frames are written to disk.
+
+| Arm | Size | Y plane | Writes | Delivered | Worst gap |
+|---|---|--:|:--|--:|--:|
+| A | 1920×1440 | 2.76 MB | **ON** | **32.11 fps** | 5.00 periods |
+| B | 1920×1440 | 2.76 MB | **OFF** | **59.04 fps** | 2.00 periods |
+| C | 1280×720 | 0.92 MB | **ON** | **56.80 fps** | 2.00 periods |
+
+**The camera delivers 59 of a requested 60 fps at 1920×1440.** Our own writer costs 46% of the
+frames. At 2.76 MB per frame, 60 fps is ~166 MB/s to app-private storage; when that saturates,
+unreturned `ImageReader` buffers throttle the camera, and the symptom is indistinguishable from a
+slow sensor. Drop the frame to 0.92 MB and 95% of frames survive.
+
+### The cadence, which names the mechanism precisely
+
+An average rate cannot separate a slow sensor from a fast sensor whose frames are dropped. The
+**modal** inter-frame interval can, because dropped frames add whole multiples of the true period
+and cannot shift the most common value. For arm C (`tools/frame_cadence.py`):
+
+- modal interval **16.66 ms → 60.02 fps** — the sensor is running at exactly the requested rate
+- **17 gap events, every one exactly 2× modal**, never larger
+- **17 frames dropped, 5.4% of expected**
+
+Single misses of an otherwise metronomic cadence point at the buffer queue momentarily running dry,
+not at a stall. Six `ImageReader` buffers may simply be too few; that is a testable next step
+rather than a conclusion.
+
+### What this bounds, and what it does not
+
+**It bounds the capture harness, not the link.** The live receiver *decodes* frames; it does not
+write them. So this constrains what can be *recorded* for offline analysis and says nothing about
+achievable goodput. Conflating the two would be exactly the error PERFORMANCE-PHILOSOPHY's
+six-rate discipline exists to prevent.
+
+For OQ-023 — is there a lossless capture path for the harness? — the answer is **yes, bounded by
+write throughput**. Roughly 50 MB/s sustained works on this device's app-private storage
+(0.92 MB × 56.8 fps ≈ 52 MB/s). Consequences worth planning around:
+
+- **1280×720 at 60 fps records with ~5% loss.** Usable.
+- **1920×1080 at 60 fps is 124 MB/s** and will drop heavily. Untested, but the trend is clear.
+- **The 240 fps arm cannot be recorded frame-for-frame at all** by this route. At 720p that is
+  221 MB/s. Recording the high-rate path needs either a RAM ring buffer flushed afterwards (720p
+  ×240 fps × 1 s ≈ 221 MB, so seconds not minutes), faster storage, or accepting a sampled
+  recording. **Lossy compression remains excluded** — it destroys exactly the high-spatial-frequency
+  cell structure the recordings exist to measure (C17).
+
+**The generalisable lesson.** The instinct on seeing 32 fps was to distrust the vendor, and the
+project's own risk register (RISK-011) supplies a ready-made story for why the device would be
+lying. That made the wrong conclusion *more* attractive, not less. The A/B cost one extra run.
+
+---
+
+## F29 — The first real capture reached the harness, and the harness refused it `[FACT]`
+
+**2026-08-04.** 300 frames captured on a physical phone, pulled to the desktop, and fed to
+`ffreplay` — the production replay path, on real camera data, for the first time.
+
+`ffreplay` parsed the bundle, found all 300 frames, and then **refused to decode**:
+
+```
+grid                     0x0
+capture                  1280x720 @ 60.0 fps, 300 frames
+⚠ INCOMPLETE METADATA — not usable as experimental evidence.
+  missing: sender_model grid_cols/grid_rows distance_cm source_payload_sha256
+layout: value_out_of_range
+```
+
+**That is the correct answer and the point of the exercise.** There was no transmitter, so no grid
+was recorded, and `FrameLayout::Create(0, 0)` rejects it. C17 was built early specifically so the
+first real capture would land on a path already known to be sound (F17), and its
+incomplete-metadata guard fired on the first real capture rather than quietly producing a number
+from a half-labelled dataset.
+
+**What this establishes:** the bundle format round-trips from a real Android device — written by
+`harness::CaptureWriter` through JNI, pulled, parsed, and enumerated by the same reader the
+simulator uses. The path from phone to analysis tool exists and works.
+
+**What it does not establish:** nothing has been decoded. These are pictures of a desk. Decoding
+real optical frames needs a transmitter presenting known states (C03/C04), and that is the next
+piece of work. `Fd` remains unmeasured (EXP-006), and no goodput figure of any kind has been
+measured on hardware.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.
@@ -1176,15 +1288,26 @@ bit-identical to live decode (C17, F17); and the C14 estimator and code-rate pol
 
 **What still is not validated:**
 
-- **Almost every platform claim is still unmeasured.** *Corrected 2026-08-04:* this entry
-  read "No device code at all… this is unchanged and remains the single most important gap",
-  which stopped being true when the C02 probe ran on an SM-S948U1 (F27). What that run
-  established is narrow and worth stating precisely: it read the device's *claims* and
-  confirmed four DEVICE-MATRIX figures. It measured **no behaviour**. `Fd` is still
-  unmeasured (EXP-006), frame delivery and distinctness are still unmeasured (EXP-007), and
-  manual-control obedience is still unmeasured — which is why the probe returns UNSUPPORTED.
-  The gap narrowed from "no hardware contact at all" to "enumeration done, verification
-  not started".
+- **The receiver's camera path is measured; nothing else about the hardware is.**
+  *Corrected twice on 2026-08-04*, which is itself the point — this entry has gone stale within
+  hours, twice, and the superseded text is kept rather than overwritten:
+  - It first read *"No device code at all… the single most important gap"*, false once the C02
+    probe ran (F27).
+  - It was then rewritten to say frame delivery, distinctness and manual-control obedience were
+    *still unmeasured*, and that became false the same day (F28).
+
+  **What is now measured on the S26 Ultra:** CPU-path delivery of **59.04 fps** against a
+  requested 60 at 1920×1440, **0 duplicate frames in 600**, and manual exposure / ISO / AE /
+  `EDGE_MODE` / `NOISE_REDUCTION_MODE` all reported as requested. A real capture bundle reached
+  `ffreplay` (F29).
+
+  **What is still unmeasured, and it is most of what matters:** `Fd` — no transmitter exists, so
+  no display state has ever been presented or counted (EXP-006). The **240 fps high-speed path**,
+  which is the one that gates milestone 6 and the one where duplication risk actually sits
+  (OQ-002). Whether `EDGE_MODE` OFF *behaves* as off, which needs a known
+  high-spatial-frequency target. Rolling-shutter skew (F25). `Pc`, and every optical property of
+  the channel. **No goodput figure of any kind has been measured on hardware**, and the probe
+  still correctly returns UNSUPPORTED.
 - **The channel model is uncalibrated** (RISK-024). Its impairments are plausible, not
   validated. Every simulator number in this document is `[HYP]` for that reason.
 - `Pc`, `Fd` and the density cliff — the model's highest-leverage unknowns — remain entirely

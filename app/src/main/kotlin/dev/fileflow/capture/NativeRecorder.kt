@@ -109,6 +109,22 @@ class Recorder private constructor(private var handle: Long) : AutoCloseable {
     val framesWritten: Int
         get() = if (handle != 0L) NativeRecorder.framesWritten(handle) else -1
 
+    /**
+     * Frames byte-identical to their immediate predecessor, i.e. buffers the camera delivered
+     * twice.
+     *
+     * Sensor noise is what makes this a measurement rather than a guess: two real exposures of
+     * even a static scene differ in a large share of their bytes, so a byte-identical frame is a
+     * repeat. Timestamps cannot detect this — repeated buffers still carry distinct ones — which
+     * is precisely the failure mode the camera research notes warn about for high-speed sessions.
+     */
+    val duplicateFrames: Int
+        get() = if (handle != 0L) NativeRecorder.duplicateFrames(handle) else -1
+
+    /** Hash of the most recent frame, so a per-frame trace can show WHERE duplicates cluster. */
+    val lastFrameHash: Long
+        get() = if (handle != 0L) NativeRecorder.lastFrameHash(handle) else 0L
+
     /** Flushes metadata with the final frame count. **A bundle is not valid until this runs.** */
     fun finish(): Int {
         val h = handle
@@ -131,6 +147,8 @@ internal object NativeRecorder {
     ): Int
     @JvmStatic external fun finish(handle: Long): Int
     @JvmStatic external fun framesWritten(handle: Long): Int
+    @JvmStatic external fun duplicateFrames(handle: Long): Int
+    @JvmStatic external fun lastFrameHash(handle: Long): Long
     @JvmStatic external fun close(handle: Long)
     @JvmStatic external fun errorName(code: Int): String
 }

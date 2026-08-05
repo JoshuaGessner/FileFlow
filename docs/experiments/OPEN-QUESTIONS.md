@@ -17,15 +17,15 @@ plan) · **Medium** (would change a component) · **Low** (would refine a parame
 
 | ID | Question | Severity | Resolved by | Status |
 |---|---|---|---|---|
-| **OQ-001** | On reference devices, what is the maximum frame rate at which CPU-accessible `YUV_420_888` is delivered without drops, at a resolution sufficient for our densest grid? | **Blocking** | EXP-007 | Open |
+| **OQ-001** | On reference devices, what is the maximum frame rate at which CPU-accessible `YUV_420_888` is delivered without drops, at a resolution sufficient for our densest grid? **ANSWERED for the S26 Ultra 2026-08-04 (F28):** **59.04 fps delivered of 60 requested at 1920×1440**, with a metronomic 16.66 ms modal interval and **0 duplicates in 600 written frames**. The caveat is ours, not the device's — writing 2.76 MB/frame saturates storage and costs 46% of frames, so "without drops" depends on the recorder, not the camera. Still open for the **Pixel 8**, which has not been measured | **Blocking** | EXP-007 | **Answered (S26 Ultra)** |
 | **OQ-002** | Does the GPU-texture path in a high-speed session deliver genuinely *distinct* frames at 120 fps, or does the vendor pipeline duplicate/interpolate them? | **Blocking** (milestone 6) | EXP-007 | Open |
 | **OQ-004** | Which presentation-verification mechanism is reliable per-frame at 60 and 120 Hz? (`ASurfaceTransaction` completion fences vs FrameTimeline vs Perfetto-only) | High | EXP-006 | Open |
 | **OQ-005** | Does `setFrameRate` reliably hold a 120 Hz mode for a multi-minute transfer, or does thermal/power management drop it? | High | EXP-006, EXP-020 | Open |
 | **OQ-015** | How much active capability *verification* is worth doing at startup versus at session negotiation? | Medium | CAP-03 design | Open |
-| **OQ-016** | Do vendor `EDGE_MODE` / `NOISE_REDUCTION_MODE` / `TONEMAP_MODE` settings actually take effect, or are they silently ignored? | High | EXP-007 | Open |
+| **OQ-016** | Do vendor `EDGE_MODE` / `NOISE_REDUCTION_MODE` / `TONEMAP_MODE` settings actually take effect, or are they silently ignored? **PARTLY ANSWERED 2026-08-04 (F28):** on the S26 Ultra, `EDGE_MODE` and `NOISE_REDUCTION_MODE` both **report OFF as requested** in `CaptureResult`, as do `CONTROL_AE_MODE` and an exact `SENSOR_EXPOSURE_TIME`. But *reporting* a mode is one step short of *behaving* as it: confirming no sharpening is applied needs a known high-spatial-frequency target, which needs a transmitter. `TONEMAP_MODE` untested | High | EXP-007, then a transmitter for the behavioural half | **Narrowed** |
 | **OQ-017** | Is `SENSOR_ROLLING_SHUTTER_SKEW` reported, and is the reported value accurate? | Medium | EXP-007, EXP-008 | Open |
 | **OQ-018** | Does panel subpixel structure (OLED PenTile vs LCD stripe) measurably affect binary luminance separation at our cell pitches? | Medium | EXP-021 | Open |
-| **OQ-023** | Is there a lossless recording path for the capture harness, or does every available recording route compress lossily? | High | EXP-007 | Open |
+| **OQ-023** | Is there a lossless recording path for the capture harness, or does every available recording route compress lossily? **ANSWERED 2026-08-04 (F28, F29):** **yes — raw Y-plane bundles, no codec involved** — and one was pulled from a phone and parsed by `ffreplay`. It is bounded by **write throughput, ~50 MB/s** on app-private storage: 1280×720 at 60 fps records with ~5% loss, 1920×1080 at 60 fps needs 124 MB/s and will not, and the 240 fps arm cannot be recorded frame-for-frame by this route at all (needs a RAM ring buffer, faster storage, or a sampled recording). Lossy compression stays excluded — it destroys the cell structure the recordings exist to measure | High | EXP-007 | **Answered, with a throughput bound** |
 
 ## Signal and modulation
 
@@ -89,8 +89,11 @@ plan) · **Medium** (would change a component) · **Low** (would refine a parame
 
 ## The five most consequential
 
-1. **OQ-001 / OQ-002 — camera frame-rate and access-path reality.** Determines a large
-   implementation fork and whether milestone 6 has any basis at all.
+1. **OQ-002 — does the high-speed path deliver *distinct* frames?** OQ-001 is now answered
+   for the S26 Ultra (60 fps CPU-readable, delivered, distinct — F28), which removes half of this
+   pair. What remains is the half that gates milestone 6: the 240 fps constrained high-speed
+   session has not been run, and duplication there is invisible to capability enumeration. The CPU
+   path's clean result says nothing about it — a different API, a different buffer pipeline.
 2. **OQ-029 — the real `Pc`.** The model's weakest input and among its highest-leverage
    variables. If `Pc` is ~0.35 rather than ~0.70, every projection halves.
 3. **OQ-003 / OQ-024 — grid and layout, and where the density cliff sits.** The literature
