@@ -62,11 +62,48 @@ model says M2 is required for milestone 4.
 
 **Note.** This phase needs **no hardware** and can start immediately.
 
+> **Status 2026-08-04: MOSTLY BUILT, EXIT CRITERIA NOT MET.** Recorded plainly because Phase 2 work
+> started anyway, and a reader is entitled to know the sequence was broken deliberately rather than
+> by accident.
+>
+> **Met:** identity-channel round trip is bit-exact; the impairment pipeline, sweep capability and
+> the desktop CI build with ASan/UBSan all exist; same seed plus commit gives identical output
+> (there is a determinism gate in CI).
+>
+> **Not met:**
+> - **EXP-010, EXP-011, EXP-012 have not run.** So differential schemes are unranked, no code
+>   family has been selected (RS is a working default, OQ-009), and fountain overhead is measured
+>   only incidentally (F4: LT overhead 0.54 on an impaired channel, far worse than RaptorQ's ~2%
+>   class).
+> - **C18's deterministic test vectors do not exist**, and neither do golden-frame vectors.
+> - **Reproducible run *config files* do not exist** (SIM-02) — runs are reproducible from flags
+>   plus the echoed seed, which satisfies the property but not the artefact.
+>
+> **The key decision point below is therefore still open.** EXP-010 either confirms ADR-0008 or
+> supersedes it, it needs no hardware, and it is cheap. Leaving it unrun while doing hardware work
+> means Phase 2 calibrates the simulator against conclusions that are themselves incomplete.
+
 ---
 
 ## Phase 2 — Static channel characterisation
 
 **Entry.** Phase 1 exit; reference hardware available.
+
+> **Status 2026-08-04: IN PROGRESS.** Entered without Phase 1's exit criteria being met (see
+> above), because hardware became available and the probe/recorder work was the shortest path to
+> real data.
+>
+> **Done:** capability probe (C02) built and **run on hardware** (F27); camera capture service with
+> manual-control locking **and read-back verification** (C05 CPU path, F28); recorded-frame harness
+> (C17) exercised on a real device capture (F29). EXP-007's enumeration half and its CPU-path
+> verification half are both complete.
+>
+> **Not done, in rough order of leverage:** **EXP-006 (`Fd`)** — blocked on a transmitter, and the
+> single most important missing number; **EXP-001** (density cliff) — needs real captures of real
+> optical frames, and F16 established the simulator *cannot* answer it; **EXP-009** (`Pc`);
+> **SIM-03** simulator calibration, which is what would close RISK-024; **BEN-05** QR baseline;
+> **CV-01 on hardware** (it is measured only against synthetic ground truth so far); and the
+> **≥120 fps high-speed capture path** (OQ-002).
 
 **Work.** Capability probe (C02); camera capture service with manual control locking;
 static pattern detection and rectification (CV-01); recorded-frame harness (C17);

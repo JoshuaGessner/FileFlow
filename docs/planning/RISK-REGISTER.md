@@ -29,6 +29,14 @@ densest grid, forcing a coarser grid exactly where we wanted more rate.
 **Mitigation.** Enumerate in the capability probe; adapt grid to available resolution;
 model the goodput consequence explicitly rather than assuming density is free.
 **Trigger.** EXP-007 shows high-speed resolutions below the grid requirement.
+**FIRED 2026-08-04 (F27, F28).** The SM-S948U1 offers exactly two high-speed modes, **720p and
+1080p, both 240 fps** — nothing higher. At the 144×240 charter grid on its own 1440×3120 panel, a
+1080p capture yields roughly **4.9 px/cell** across rows. So on the high-rate path the **receiver,
+not the panel, bounds grid density**, and the 180×390 grid the panel permits is pointless at
+240 fps. `[HYP]` on the px/cell figure — it assumes ~80% frame fill.
+**Consequence:** EXP-001 and EXP-013 must treat **1080p capture as its own arm** rather than
+assuming the transmitter is the limiting side. The mitigation's last clause — model the goodput
+consequence rather than assuming density is free — is now a requirement, not a precaution.
 
 ### RISK-003 — Display requests do not yield deterministic presentation
 **Likelihood.** Medium · **Impact.** High · **Owner.** TX
@@ -55,6 +63,18 @@ averages over the cell; avoid grid pitches that resonate with panel subpixel str
 **Mitigation.** Capability *verification*, not just enumeration (CAP-03). Verify requested
 settings appear in returned `CaptureResult` metadata.
 **Trigger.** Any device where requested manual settings are not reflected in results.
+**First evidence 2026-08-04 (F28) — and it does NOT fire.** On the SM-S948U1 every requested
+control is reflected in `CaptureResult`: exposure exact (4,166,666 ns), ISO quantised 400→398,
+`CONTROL_AE_MODE` OFF, `EDGE_MODE` OFF, `NOISE_REDUCTION_MODE` OFF. One device, one session, so
+"High" likelihood stands for the population — but the mitigation worked, and the read-back is now
+routine in the recorder rather than a special exercise.
+
+**Two cautions this evidence does not remove.** *Reporting* a mode is one step short of *behaving*
+as it: proving `EDGE_MODE` OFF applies no sharpening needs a known high-spatial-frequency target,
+i.e. a transmitter. And this risk's real sting arrived from the opposite direction — the rate
+shortfall in F28 looked exactly like a vendor misreporting 60 fps, and RISK-011 supplied a
+ready-made story for why. It was our own missing `SENSOR_FRAME_DURATION`. **A register entry that
+makes a wrong conclusion more attractive is a hazard in its own right.**
 
 ### RISK-025 — The S26 Ultra's Privacy Display restricts the optical channel
 **Likelihood.** High (the feature is present) · **Impact.** Medium-High · **Owner.** TX
@@ -241,6 +261,22 @@ acceptance gate.
 periodic divergence review (DOC-05); automated link checking (DOC-04, **done** — the `docs` CI
 job).
 **Trigger.** Any ADR contradicted by an experiment but left unamended.
+**Update 2026-08-04 — it fired again, an order of magnitude larger (F30).** An audit before
+starting the transmitter found **~30 entries in FEATURE-REGISTRY marked `Planned` that were built,
+tested and written up in F2–F19**: the whole fountain layer, intra-frame FEC, the interleaver,
+header codec, hash gate, filename sanitisation, bounds/overflow/fuzzing, and the entire CV chain.
+A fresh reader would have concluded the project had a simulator and little else.
+
+Worse, the **recurrence rate**: PHASE1-FINDINGS' own "not validated" list was wrong **three times
+in about thirty hours**, each time understating progress, each time corrected within a day of being
+written. The cause is structural — CONTRIBUTING's update rule is honoured for *documents* and
+skipped for *code*, because the registry is not where work happens and **nothing fails when it goes
+stale**. Link checking cannot catch it; every stale entry had valid links.
+
+Two changes rather than another promise to be careful: `DOC-05` is re-scoped from a one-off task to
+a **periodic** review, and the registry now separates **implemented** from **acceptance met** so an
+entry cannot be silently wrong in either direction.
+
 **Update 2026-08-03 — this risk has fired repeatedly, and "High" is if anything generous.** A
 divergence review after the C14 work found five items, none of which any automated check could
 have caught, because **every one had valid links and compiling code**:

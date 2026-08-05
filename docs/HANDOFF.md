@@ -44,7 +44,7 @@ Read these first, in order:
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests          # must show 215 passing
+./build/desktop-release/core/tests/fileflow_tests          # must show 238 passing
 
 cmake --preset desktop-asan   && cmake --build build/desktop-asan -j8
 ./build/desktop-asan/core/tests/fileflow_tests             # ASan+UBSan, must be clean
@@ -141,9 +141,34 @@ Full detail in `docs/experiments/PHASE1-FINDINGS.md`. The ones that change how y
 
 ## The single most important constraint
 
-**No measurement on real hardware exists.** The Android project now exists and builds — that
-changed on 2026-08-03 — but nothing has run on a phone, so every platform claim is still
-documentation-derived and every performance figure is still a simulator output.
+**`Fd` has never been measured, and no goodput figure exists on hardware.** That is now the
+constraint — it is narrower than it was on 2026-08-03, when nothing had run on a phone at all.
+
+**What HAS run on hardware** (samsung SM-S948U1, SoC SM8850, Android 16 / API 36):
+- The **C02 probe** (F27). Four DEVICE-MATRIX press figures confirmed against the real panel,
+  including the 144×240 charter grid at an integer 10×13 px pitch. The panel offers 120 Hz at full
+  1440×3120 and has no 144 Hz mode. Camera advertises LEVEL_3, `MANUAL_SENSOR`, REALTIME
+  timestamps, 60 fps CPU-readable, and two 240 fps high-speed modes (720p, 1080p only).
+- The **C05 CPU capture path** (F28). **59.04 fps delivered of 60 requested** at 1920×1440,
+  **0 duplicate frames in 600**, and manual exposure / ISO / AE / `EDGE_MODE` /
+  `NOISE_REDUCTION_MODE` all honoured — so RISK-011 does **not** bite here, which is worth knowing
+  because the register expects the opposite.
+- A **real capture bundle through `ffreplay`** (F29), which correctly **refused** it: no
+  transmitter, so no grid, so incomplete metadata. C17's guard firing on the first real capture is
+  what building it early was for.
+
+**Read F28 before trusting any rate you measure.** Requested 60 fps, got 32, and the tempting
+conclusion — that the vendor overstated it — was wrong. Two of our own defects came first: a
+missing `SENSOR_FRAME_DURATION` (with AE off, `CONTROL_AE_TARGET_FPS_RANGE` does nothing), and a
+test script that reported a *stale* run. The A/B against a no-write arm is what settled it. That
+would have been the third time this project measured its own bug and concluded something about the
+world (F14, F15).
+
+**Still unmeasured, and this is the gap:** `Fd` — nothing has presented a display state, so nothing
+has counted one (EXP-006). The **240 fps high-speed path**, which gates milestone 6 and is where
+duplication risk actually sits (OQ-002); the CPU path's clean result says nothing about it.
+Rolling-shutter skew (F25). `Pc` and every optical property of the channel. The probe still
+correctly returns **UNSUPPORTED**.
 
 **Android status.** `platform/android/` + `app/` build a real APK containing exactly one
 `arm64-v8a` `libfileflow.so`; `core/` cross-compiles under NDK r29 **unchanged**, which validated
@@ -160,16 +185,19 @@ a thin Kotlin marshalling layer per **ADR-0014**, and **C05's recording path**
 (`platform/android/src/jni_recorder.cpp`) reusing `harness::CaptureWriter` so bundles are
 byte-compatible with what `ffreplay` consumes by construction.
 
-**What is NOT implemented, and it is the whole remaining gap to real data:** the *verification*
-half of the probe (nothing upgrades `Evidence` to `kVerified`, so the probe returns
-`kUnsupported` on every device — correct, not a bug) and the **live `CameraCaptureSession`** —
-opening it, locking exposure/ISO/focus/AWB, and checking the requested settings actually appear
-in the returned `CaptureResult` (RISK-011). Until that exists there is nothing to record.
+Also implemented and **run**: the **live `CameraCaptureSession`** (`CameraRecorder.kt`,
+`CaptureActivity.kt`) with manual locking and read-back verification, and duplicate detection in
+the writer. Drive it with `tools/android_capture.sh` and analyse cadence with
+`tools/frame_cadence.py`; the `write` arm is the A/B that separates camera rate from writer I/O.
 
-The remaining path to real data: (1) open a capture session and lock manual settings, (2) verify
-by measurement so `Evidence` can become `kVerified` (EXP-006 for `Fd`, EXP-007 for the camera),
-(3) record a bundle and replay it through `ffreplay`. The moment (3) works, every analysis tool
-built so far applies to real data unchanged — no transmitter, UI or live link required.
+**What is NOT implemented:** any **transmitter** (C03/C04 on Android), which is why `Fd` is
+unmeasured and why nothing has been decoded from real optics. Nothing upgrades `Evidence` to
+`kVerified` yet either, so the probe's tier stays `kUnsupported` — correct, not a bug.
+
+**A recording-throughput ceiling to plan around (F28):** app-private storage sustains ~50 MB/s, so
+720p60 records with ~5% loss, 1080p60 needs 124 MB/s and will not, and the 240 fps arm cannot be
+recorded frame-for-frame by this route at all. This bounds the **harness**, not the link — the live
+receiver decodes rather than writes. Lossy compression stays excluded (C17).
 
 **Beware F25's lesson before trusting any platform claim in `docs/research/`:** the first one to
 meet a compiler was wrong. `SENSOR_ROLLING_SHUTTER_SKEW` is a `CaptureResult` key, not a
@@ -191,8 +219,19 @@ meet a compiler was wrong. `SENSOR_ROLLING_SHUTTER_SKEW` is a `CaptureResult` ke
 4. **M2 four-level luminance.** F19 predicts this is where soft information starts to matter,
    and F23 sharpens the prediction: crosstalk already produces real symbol errors on the
    cell-sample path, and M2's levels sit at one third the spacing.
-5. **Android shell** — ask first. Still the only path to the measurements that matter
-   (`Pc`, `Fd`, the density cliff), and still gated on a go-ahead.
+5. ~~**Android shell**~~ **DONE, and run on hardware 2026-08-04** — F27, F28, F29. See the
+   constraint section above for exactly what was measured and what was not.
+6. **Android transmitter (C03/C04) — the current work.** Present optical frames via
+   `AChoreographer_postVsyncCallback` at native resolution with no scaling, and verify presentation
+   rather than assuming it. This unblocks **EXP-006 (`Fd`)**, the model's highest-leverage
+   unmeasured input, and it is what makes a real decode possible at all.
+
+> **Note on process, worth reading before planning (F30).** Phase 1's exit criteria are **not
+> met** — EXP-010, EXP-011 and EXP-012 have not run, and C18's deterministic test vectors do not
+> exist — yet Phase 2 hardware work is underway. That was a deliberate reordering once hardware
+> became available, not an oversight, but it means **the simulator conclusions Phase 2 is meant to
+> calibrate against are themselves incomplete**. EXP-010 in particular can kill or confirm ADR-0008
+> cheaply, entirely in simulation.
 
 ## What to tell the user
 
