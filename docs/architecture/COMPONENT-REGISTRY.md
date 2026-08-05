@@ -89,6 +89,26 @@ that unknown devices get the conservative tier.
 at startup versus at session negotiation?
 
 ## C03 — Transmitter renderer
+> **Status 2026-08-04: IMPLEMENTED AND RUNNING ON HARDWARE.**
+> (`app/.../tx/OpticalRenderer.kt`, `app/.../TransmitActivity.kt`; GLES2.)
+>
+> **Measured (F31):** **120.21 states submitted per second**, median interval 8.333 ms
+> (120.01 /s cadence), **0 of 2402 intervals above 1.5× median**, 0 render errors, on a 120×260 grid
+> at an exact 9 × 9 px pitch. Pixels verified by `tools/verify_tx_screenshot.py`, not assumed.
+>
+> **The texture is uploaded at CELL resolution and upscaled with `GL_NEAREST`.** That is bit-exact
+> rather than approximate *because* the pitch is an exact integer, and it cuts the upload by ~130×.
+> If the integer-pitch requirement is ever relaxed, this shortcut stops being exact.
+>
+> **"At native resolution" turned out not to be ours to choose (F31).** The renderer requested
+> 1440×3120 and got 1080×2340; Samsung gates resolution behind a system setting. So this
+> responsibility is now: present at the *surface* resolution, verify the pitch is integer, and refuse
+> the run loudly when it is not.
+>
+> **This component cannot discharge "report which frames were actually presented."** It reports
+> frames *submitted*. Presentation confirmation is unavailable-to-unreliable (`frame.h`), which is
+> why every frame carries its own sequence number and why `Fd` is a receiver-side measurement.
+
 **Responsibility.** Present optical frames at the requested rate, at native resolution,
 with no scaling, and report which frames were actually presented.
 **Inputs.** Cell value matrix; presentation schedule.
@@ -105,6 +125,19 @@ size equals panel native resolution.
 **Open questions.** OQ-004, OQ-005.
 
 ## C04 — Optical frame generator
+> **Status 2026-08-04: IMPLEMENTED (portable core since Phase 1) AND DRIVEN ON HARDWARE.**
+> (`core/src/grid.cpp` + `core/src/modulation.cpp`, bridged by
+> `platform/android/src/jni_transmitter.cpp`.)
+>
+> ADR-0014: the phone renders frames from the **same** `FrameLayout` + `M0Modulator` +
+> `HeaderCodec` + `IntraFec` + `FileTransmitter` the simulator drives, so a frame presented on a
+> device is the frame `ffsim` would have produced for that session. Without that equivalence a real
+> capture could not be compared to a simulated one at all.
+>
+> **Keeps up at 120 Hz on-device with zero errors** (F31) — fountain symbol, interleaved RS, and a
+> 31,200-cell render, per state. Measured `O` = 0.0687 at 120×260, against 0.0831 at 120×200 (F3):
+> fixed-size markers and header bands amortise better over a larger grid.
+
 **Responsibility.** Turn coded payload bits into a complete cell matrix: markers, timing
 tracks, phase indicator, header, pilots, guards, payload, CRC.
 **Inputs.** Coded payload bits; link profile; sequence number; session ID.

@@ -87,6 +87,23 @@ cannot render crisply and which raises spatial crosstalk for no gain. Computed b
 **Each charter grid is integer on exactly one of the two devices and fractional on the
 other.** There is no single charter grid that suits both.
 
+> ### ⚠ These grids are computed from the panel's MAXIMUM resolution, which an app may never get
+>
+> **Measured 2026-08-04 (F31):** the transmitter requested the 1440×3120 mode on an SM-S948U1 and
+> GL handed it **1080×2340**. Samsung gates panel resolution behind a system display setting and the
+> request is ignored silently.
+>
+> The consequence is severe for the table below: **144×240 is 7.5 × 9.75 px/cell at 1080×2340 —
+> fractional**, i.e. unusable. Meanwhile **120×260 is integer at both** resolutions (12 × 12 px at
+> 1440×3120, 9 × 9 px at 1080×2340).
+>
+> **So the grid must be chosen from the surface the app is actually given, at runtime — not from the
+> panel's advertised maximum.** These tables remain correct as *capability* statements and must not
+> be used directly as a grid selection.
+>
+> This is also an unplanned argument for the **square-cell** options: they survive a resolution
+> change, and the charter grids do not (see OQ-038).
+
 ### Recommended per-device grids
 
 | Device | Grid | Cell pitch | Cells | Note |

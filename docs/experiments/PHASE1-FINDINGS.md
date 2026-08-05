@@ -1321,6 +1321,80 @@ makes someone rebuild a working subsystem or distrust a finding that was sound.
 
 ---
 
+## F31 — An app does not get the panel's native resolution, and the charter grid dies without it `[FACT]`
+
+**Found:** 2026-08-04, first run of the Android transmitter (C03/C04) on an SM-S948U1.
+
+The transmitter requested the **1440×3120 @ 120 Hz** mode through `preferredDisplayModeId`. GL
+received **1080×2340**. The request was ignored silently — Samsung gates panel resolution behind a
+system *display resolution* setting, and an app cannot override it.
+
+### What that does to the grid
+
+The integer-pitch requirement is not a preference: a fractional pitch puts cell boundaries on
+fractional pixels, which the panel cannot render crisply and which raises spatial crosstalk for no
+gain (DEVICE-MATRIX). So the pitch has to be exact.
+
+| Grid | At 1440×3120 (panel max) | At 1080×2340 (what an app gets) |
+|---|---|---|
+| **144×240** — the charter grid | **10 × 13 px, integer** | **7.5 × 9.75 px — FRACTIONAL** |
+| **120×260** — the square-cell option | **12 × 12 px, integer** | **9 × 9 px, integer** |
+
+**The charter grid for this device is unusable at the resolution the device actually hands out.**
+The square-cell alternative is integer at *both*, because 1440/120 = 12 and 1080/120 = 9, while
+3120/260 = 12 and 2340/260 = 9.
+
+**This is an unplanned argument for the square-cell grid, and a strong one.** DEVICE-MATRIX already
+recommended 120×260 for isotropic crosstalk and a simpler sampler. It turns out to also be the grid
+that *survives a resolution change* — and a grid whose validity depends on a user-controlled display
+setting is fragile in a way no amount of receiver work can fix.
+
+**The deeper error is in how the grid was chosen.** DEVICE-MATRIX's table and the C02 probe's
+integer-pitch list are both computed from the panel's **advertised maximum**. That is correct as a
+*capability* statement and wrong as a basis for choosing a grid. The grid must be derived from the
+**surface the app is actually given**, which is knowable only at runtime, after the surface exists.
+The renderer now logs loudly and the report refuses the run when the pitch is fractional.
+
+### Measured, on a verified-exact 120×260 grid
+
+| | |
+|---|--:|
+| States submitted | **120.21 /s** over 19.99 s |
+| Median submit interval | **8.333 ms → 120.01 /s cadence** |
+| Intervals > 1.5× median | **0 of 2402** |
+| Render errors | **0** |
+| Cell pitch | 9 × 9 px, exact |
+| Payload cells | 29,057 of 31,200 (`O` = 0.0687) |
+
+**This is an upper bound on `Fd`, not `Fd`.** A transmitter cannot confirm presentation — which is
+exactly why every frame header carries its own sequence number (`frame.h`) — so `Fd` is *distinct
+presented states per second* as measured by the receiver. A state submitted and then dropped by the
+compositor has been submitted, not presented.
+
+Worth noting separately: the **entire encode chain runs at 120 Hz on-device with zero errors** —
+fountain symbol, interleaved Reed–Solomon, and M0 rendering of 31,200 cells, per state. The
+transmitter side is not the bottleneck at 120 Hz.
+
+### Two process failures, both instructive
+
+**"0 render errors" meant nothing.** The first run reported a beautiful 120.15 states/s — through a
+**fractional** 7.5 × 9.75 px pitch. The error counter only tracked whether `nextFrame()` returned
+success; it could not see that the pixels reaching the panel were wrong. **A clean cadence number
+from a misconfigured renderer is worse than no number at all**, because it invites belief. The fix
+was to check the pixels: `tools/verify_tx_screenshot.py` asserts integer pitch, a bright boundary
+ring, a two-level interior (a mid-grey interior is the signature of a *filtered* upscale), and pixel
+run lengths that are whole multiples of the pitch — which is what actually proves `GL_NEAREST` gave a
+bit-exact upscale.
+
+**Then the verifier failed for the wrong reason.** It sampled the outermost *pixel* row for the
+boundary ring and found it dark, reporting "frame missing, offset or inverted" when the frame was
+fine. Rounded display corners are black, and `screencap` composites system overlays such as the
+gesture pill on top of the surface. Sampling the centre of the outermost **cell** fixed it. A
+verifier that fails for the wrong reason costs as much time as the defect it was built to catch, and
+it erodes trust in the one tool that was working.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

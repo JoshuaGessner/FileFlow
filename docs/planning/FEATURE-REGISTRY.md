@@ -92,7 +92,7 @@ infer it from the refresh rate. That refusal is the feature working, not a gap i
 **Phase.** 3 · **Priority.** P0 · **Subsystem.** C03 · **Related.** ADR-0004
 **Acceptance.** Presents requested states at 30/60 Hz with a measured discrepancy rate;
 surface size asserted equal to native mode resolution.
-**Performance.** Critical — bounds `Fd`. **Experiments.** EXP-006 · **Status.** Planned
+**Performance.** Critical — bounds `Fd`. **Experiments.** EXP-006 · **Status.** **Implemented and run on hardware (F31)** — GLES2, cell-resolution texture upscaled bit-exactly with `GL_NEAREST`, 120.21 states/s submitted with zero misses. **Acceptance partly met:** the *rate* is demonstrated, but "at native resolution with no scaling" is **not achievable as written** — an app receives 1080×2340 on a 1440×3120 panel (OQ-038)
 
 ### TX-02 — Optical frame generator
 **Description.** Assemble markers, timing tracks, header, pilots, guards, payload, CRC.

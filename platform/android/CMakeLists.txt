@@ -32,6 +32,7 @@ add_subdirectory(${FILEFLOW_ROOT}/harness ${CMAKE_BINARY_DIR}/harness)
 add_library(fileflow SHARED
     src/jni_probe.cpp
     src/jni_recorder.cpp
+    src/jni_transmitter.cpp
 )
 
 target_link_libraries(fileflow PRIVATE

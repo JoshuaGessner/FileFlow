@@ -38,5 +38,19 @@
             android:exported="true"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!-- The transmitter (C03). Fullscreen, portrait-locked and orientation-change-proof: a
+             re-layout mid-run would resize the surface and change the cell pitch, which the
+             receiver would see as the geometry moving under it.
+
+             `configChanges` deliberately includes `screenSize` so the activity is NOT recreated on
+             a configuration change; ADR-0004 requires the surface stay at native resolution with no
+             scaling for the whole session. -->
+        <activity
+            android:name=".TransmitActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
     </application>
 </manifest>
