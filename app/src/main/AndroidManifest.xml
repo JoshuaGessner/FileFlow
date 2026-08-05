@@ -46,6 +46,15 @@
              `configChanges` deliberately includes `screenSize` so the activity is NOT recreated on
              a configuration change; ADR-0004 requires the surface stay at native resolution with no
              scaling for the whole session. -->
+        <!-- Live aiming guidance (UI-02). Exported so a session is scriptable, and
+             portrait-locked because the schematic assumes a fixed screen orientation. -->
+        <activity
+            android:name=".AimActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <activity
             android:name=".TransmitActivity"
             android:exported="true"

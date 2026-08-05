@@ -38,6 +38,20 @@ class OpticalRenderer(
     private val tx: Transmitter,
     /** Present a new optical state every Nth vsync. 1 = every vsync. */
     private val vsyncDivisor: Int,
+    /**
+     * Pixels of black to keep clear on every side, before the pitch is computed.
+     *
+     * NOT cosmetic. A phone's display has generously rounded corners, so a full-bleed optical frame
+     * has its four corners **physically clipped by the glass** — measured at up to 77 camera pixels,
+     * about 10 cells, which puts an entire corner marker outside the emitting area (F34). Screen
+     * localisation finds the quad from the extremes of `x+y` and `x-y` and then verifies the corner
+     * markers, so both steps fail while framing, focus, exposure and density all look healthy.
+     *
+     * The simulator renders a perfect rectangle and cannot exhibit this at all, which is what makes it
+     * RISK-024's failure mode rather than a bug: a kinder-than-reality model producing a confident
+     * wrong conclusion.
+     */
+    private val marginPx: Int = 0,
 ) : GLSurfaceView.Renderer {
 
     /** Observed, not requested. */
@@ -55,6 +69,11 @@ class OpticalRenderer(
      */
     @Volatile var surfaceWidth: Int = 0; private set
     @Volatile var surfaceHeight: Int = 0; private set
+
+    /** The integer cell pitch actually used, and the pixel size of the drawn frame. */
+    @Volatile var pitchPx: Int = 0; private set
+    @Volatile var drawnWidth: Int = 0; private set
+    @Volatile var drawnHeight: Int = 0; private set
 
     /**
      * Wall-clock interval between consecutive *state submissions*, in nanoseconds.
@@ -109,17 +128,36 @@ class OpticalRenderer(
         GLES20.glViewport(0, 0, width, height)
         surfaceWidth = width
         surfaceHeight = height
-        val px = width.toDouble() / tx.cols
-        val py = height.toDouble() / tx.rows
-        Log.i(TAG, "surface ${width}x$height for a ${tx.cols}x${tx.rows} grid => $px x $py px/cell")
-        // Loud, because a fractional pitch silently degrades every downstream measurement: cell
-        // boundaries land on fractional pixels, which the panel cannot render crisply and which
-        // raises spatial crosstalk for no gain (DEVICE-MATRIX). It is a configuration error, not a
-        // channel property, and it must not be discovered later as a mysteriously poor decode.
-        if (width % tx.cols != 0 || height % tx.rows != 0) {
-            Log.e(TAG, "FRACTIONAL CELL PITCH: ${tx.cols}x${tx.rows} does not divide " +
-                       "${width}x$height. This run is not valid for measurement.")
+
+        // Largest INTEGER pitch that fits inside the margin, then centre the result.
+        //
+        // This replaces stretching the grid across the whole surface, and it removes a whole failure
+        // mode rather than merely warning about it. Full-bleed rendering required the surface to be an
+        // exact multiple of the grid, and when it was not — as on a 1080x2340 surface with the 144x240
+        // charter grid — the pitch came out at 7.5 x 9.75 px and every cell boundary landed on a
+        // fractional pixel (F31). Choosing the pitch and letterboxing makes it integer for ANY
+        // grid/surface pair, and the leftover margin is what keeps the boundary ring off the panel's
+        // rounded corners (F34).
+        val usableW = (width - 2 * marginPx).coerceAtLeast(1)
+        val usableH = (height - 2 * marginPx).coerceAtLeast(1)
+        pitchPx = minOf(usableW / tx.cols, usableH / tx.rows).coerceAtLeast(1)
+        drawnWidth = pitchPx * tx.cols
+        drawnHeight = pitchPx * tx.rows
+
+        Log.i(TAG, "surface ${width}x$height, margin $marginPx => pitch $pitchPx px/cell, " +
+                   "drawn ${drawnWidth}x$drawnHeight for a ${tx.cols}x${tx.rows} grid")
+
+        if (drawnWidth > width || drawnHeight > height) {
+            Log.e(TAG, "grid ${tx.cols}x${tx.rows} cannot fit ${width}x$height even at 1 px/cell")
         }
+
+        // Quad in normalised device coordinates, centred, sized to the drawn frame. Everything
+        // outside it is cleared to black, which is exactly the margin the corners need.
+        val hx = drawnWidth.toFloat() / width
+        val hy = drawnHeight.toFloat() / height
+        QUAD_POS.position(0)
+        QUAD_POS.put(floatArrayOf(-hx, -hy, hx, -hy, -hx, hy, hx, hy))
+        QUAD_POS.position(0)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -211,6 +249,8 @@ class OpticalRenderer(
         // Texture V is flipped relative to GL's convention so cell row 0 lands at the TOP of the
         // screen. Getting this wrong produces a vertically mirrored frame, which decodes to garbage
         // in a way that looks like a geometry bug rather than an orientation one.
+        // Rewritten in onSurfaceChanged once the pitch is known; the initial full-bleed values are
+        // only a placeholder for the first frame.
         private val QUAD_POS = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f,
         )

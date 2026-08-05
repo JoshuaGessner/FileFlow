@@ -44,6 +44,20 @@ import java.util.concurrent.TimeUnit
 class CameraRecorder(private val context: Context) {
 
     /**
+     * Set to stop an unbounded run. Checked on the camera callback thread.
+     *
+     * `@Volatile` rather than a lock: it is written from the UI thread and read from the camera
+     * thread, and a torn read of a boolean is not possible — the only requirement is visibility.
+     */
+    @Volatile
+    private var cancelled = false
+
+    /** Ends a run started with `frameCount <= 0`. Safe to call from any thread. */
+    fun cancel() {
+        cancelled = true
+    }
+
+    /**
      * Facts about the transmitter and the physical rig that the receiver cannot observe.
      *
      * Defaults are the format's **sentinels**, not plausible values: a capture whose distance was
@@ -194,6 +208,16 @@ class CameraRecorder(private val context: Context) {
          * sensor that cannot hit the rate. Run both arms and the difference names the culprit.
          */
         writeFrames: Boolean = true,
+        /**
+         * Called for every delivered frame, on the CAMERA THREAD, with a view of the driver's own Y
+         * plane. Must return promptly: the buffer is released as soon as it returns, and holding it
+         * starves the pipeline in a way that looks exactly like a camera that cannot hit its rate.
+         *
+         * This exists so aiming analysis shares ONE session and one set of manual settings with
+         * recording. A separate preview path would duplicate the request configuration, and the two
+         * copies would drift — which is the mistake ADR-0014 was written about, in a different place.
+         */
+        onFrame: ((java.nio.ByteBuffer, Int, Int, Int) -> Unit)? = null,
     ): Outcome {
         // `rig` carries the grid, and the grid decides which capture mode maximises px/cell, so it
         // must be known before the mode is chosen.
@@ -220,7 +244,7 @@ class CameraRecorder(private val context: Context) {
         var session: CameraCaptureSession? = null
         var recorder: Recorder? = null
 
-        val timestamps = ArrayList<Long>(frameCount)
+        val timestamps = ArrayList<Long>(maxOf(frameCount, 64))
         var reportedExposure = -1L
         var reportedIso = -1
         var reportedFocus = -1f
@@ -269,17 +293,26 @@ class CameraRecorder(private val context: Context) {
 
             val done = CountDownLatch(1)
             val rec = recorder
+            // `frameCount <= 0` means run until cancelled, which is what the aiming UI wants: it
+            // needs a steady stream of verdicts, not a fixed-size dataset.
+            val unbounded = frameCount <= 0
             reader.setOnImageAvailableListener({ r ->
                 val image = r.acquireNextImage() ?: return@setOnImageAvailableListener
                 try {
-                    if (timestamps.size < frameCount) {
+                    if (cancelled) {
+                        done.countDown()
+                    } else if (unbounded || timestamps.size < frameCount) {
+                        onFrame?.let { cb ->
+                            val plane = image.planes[0]
+                            cb(plane.buffer, image.width, image.height, plane.rowStride)
+                        }
                         val code = if (writeFrames) rec.writeFrame(image) else 0
                         if (code == 0) {
                             timestamps.add(image.timestamp)
                         } else if (error == null) {
                             error = "writeFrame: ${Recorder.errorName(code)}"
                         }
-                        if (timestamps.size >= frameCount) done.countDown()
+                        if (!unbounded && timestamps.size >= frameCount) done.countDown()
                     }
                 } finally {
                     // Always. A held image starves the pipeline, and a starved pipeline looks
@@ -397,11 +430,19 @@ class CameraRecorder(private val context: Context) {
                 handler,
             )
 
-            // Generous: a cold camera start plus AE settling can take a second or two, and the
-            // point is to fail with data rather than to fail fast.
-            val timeoutSec = 20L + frameCount / maxOf(targetFps, 1)
-            if (!done.await(timeoutSec, TimeUnit.SECONDS)) {
-                error = "timed out after ${timestamps.size}/$frameCount frames"
+            if (unbounded) {
+                // No deadline: an aiming session lasts as long as the user needs. Polled rather than
+                // awaited without limit so a cancel is never missed if it lands between checks.
+                while (!cancelled) {
+                    if (done.await(200, TimeUnit.MILLISECONDS)) break
+                }
+            } else {
+                // Generous: a cold camera start plus AE settling can take a second or two, and the
+                // point is to fail with data rather than to fail fast.
+                val timeoutSec = 20L + frameCount / maxOf(targetFps, 1)
+                if (!done.await(timeoutSec, TimeUnit.SECONDS)) {
+                    error = "timed out after ${timestamps.size}/$frameCount frames"
+                }
             }
         } catch (e: Exception) {
             error = "${e::class.simpleName}: ${e.message}"

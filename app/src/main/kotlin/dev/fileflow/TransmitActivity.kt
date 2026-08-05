@@ -70,6 +70,10 @@ class TransmitActivity : AppCompatActivity() {
         val seconds = intent.getIntExtra("seconds", 20)
         val nsym = intent.getIntExtra("nsym", 32)
         val payload = intent.getIntExtra("payload", 128 * 1024)
+        // Black border in panel pixels. Default is generous rather than zero: a full-bleed frame has
+        // its corners clipped by the display glass, which breaks localisation while everything else
+        // looks fine (F34). Set 0 deliberately to reproduce that.
+        val marginPx = intent.getIntExtra("marginPx", 72)
 
         // Go genuinely edge to edge and hide the system bars.
         //
@@ -116,7 +120,7 @@ class TransmitActivity : AppCompatActivity() {
                 return
             }
         tx = t
-        val r = OpticalRenderer(t, divisor)
+        val r = OpticalRenderer(t, divisor, marginPx)
         renderer = r
 
         glView = GLSurfaceView(this).apply {
@@ -172,20 +176,11 @@ class TransmitActivity : AppCompatActivity() {
             val sw = r.surfaceWidth
             val sh = r.surfaceHeight
             appendLine("  surface          ${sw}x$sh   <-- what GL actually gave us")
-            if (sw > 0 && sh > 0 && t != null) {
-                val fx = sw.toDouble() / t.cols
-                val fy = sh.toDouble() / t.rows
-                val integral = sw % t.cols == 0 && sh % t.rows == 0
-                appendLine("  cell pitch       ${"%.3f".format(fx)} x ${"%.3f".format(fy)} px/cell" +
-                           if (integral) "  (exact integer)" else "  ** FRACTIONAL **")
-                if (!integral) {
-                    appendLine("  ⚠ FRACTIONAL PITCH — this run is NOT valid for measurement.")
-                    appendLine("    Cell boundaries land on fractional pixels, which the panel")
-                    appendLine("    cannot render crisply and which raises crosstalk for no gain.")
-                    appendLine("    Pick a grid that divides ${sw}x$sh, or raise the device's")
-                    appendLine("    display-resolution setting. See F31.")
-                }
-            }
+            appendLine("  cell pitch       ${r.pitchPx} px  (exact integer by construction)")
+            appendLine("  frame drawn      ${r.drawnWidth}x${r.drawnHeight} centred, " +
+                       "margin ${(sw - r.drawnWidth) / 2} x ${(sh - r.drawnHeight) / 2} px")
+            appendLine("  → the margin keeps the boundary ring off the panel's rounded")
+            appendLine("    corners, which clip a full-bleed frame and break localisation (F34)")
             appendLine("  span             $spanMs ms")
             appendLine("  frames drawn     ${r.framesDrawn}  (${"%.2f".format(drawRate)} /s)")
             appendLine("  states submitted ${r.statesSubmitted}  (${"%.2f".format(stateRate)} /s)")
