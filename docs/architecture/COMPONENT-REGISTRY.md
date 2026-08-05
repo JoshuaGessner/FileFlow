@@ -121,8 +121,28 @@ Round-trip against the sampler with an identity channel.
 **Open questions.** Which of the three candidate layouts (OQ-003).
 
 ## C05 — Camera capture service
-> **Status 2026-08-03: RECORDING PATH IMPLEMENTED; LIVE CAPTURE SESSION NOT STARTED.**
-> (`platform/android/src/jni_recorder.cpp`, `app/.../capture/NativeRecorder.kt`.) ADR-0014.
+> **Status 2026-08-04: CPU CAPTURE SESSION IMPLEMENTED AND MEASURED ON HARDWARE.**
+> **The ≥120 fps high-speed path is NOT started.**
+> (`platform/android/src/jni_recorder.cpp`, `app/.../capture/NativeRecorder.kt`,
+> `app/.../capture/CameraRecorder.kt`.) ADR-0014.
+>
+> **Measured on an SM-S948U1 (F28):** 59.04 fps delivered of 60 requested at 1920×1440 with
+> writes disabled, a metronomic 16.66 ms modal interval, and **0 duplicate frames in 600**.
+> Manual exposure, ISO, AE, `EDGE_MODE` and `NOISE_REDUCTION_MODE` are all reported as
+> requested, so RISK-011 does not bite on this device for these controls.
+>
+> **The registry's own warning about this component came true, pointing the other way.** The
+> entry says work done on the camera callback thread costs frames and therefore `Pc`. It does:
+> writing 2.76 MB per frame saturates storage at ~166 MB/s, unreturned `ImageReader` buffers
+> throttle the camera, and delivery fell to 32 fps — indistinguishable from a sensor that
+> cannot hit the rate until an A/B separated them. Frame drops were single misses of an
+> otherwise exact cadence, i.e. buffer-return latency. **This bounds the recording harness,
+> not the link**, because the live receiver decodes rather than writes.
+>
+> **Duplicate detection lives in the writer** (`jni_recorder.cpp`): a frame byte-identical to
+> its predecessor is a repeated buffer, and sensor noise makes that decisive. Timestamps
+> cannot detect duplication — repeats still carry distinct ones — which is why the check is
+> pixel-based and why it needs no transmitter to be meaningful.
 >
 > **The recorder reuses `harness::CaptureWriter` rather than reimplementing the bundle format**,
 > and that is load-bearing rather than convenient: F17's proof that replay is bit-identical to

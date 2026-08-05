@@ -1263,6 +1263,64 @@ measured on hardware.
 
 ---
 
+## F30 — The registries said almost nothing was built `[FACT]`
+
+**Found:** 2026-08-04, auditing for skipped steps before starting the transmitter.
+
+`FEATURE-REGISTRY.md` marked **~30 entries `Planned`** that had been implemented, tested, and
+written up in findings F2–F19. A fresh agent reading it would have concluded the project had a
+simulator and little else, and might reasonably have rebuilt something that already worked.
+
+The list is not marginal: `MOD-01` (M0 modulation), `FEC-01`–`FEC-03` and `FEC-05` (intra-frame
+FEC, interleaver, erasure signalling), `FTN-01`–`FTN-04` (the whole fountain layer), `PRO-01`
+(header codec), `FIL-01`/`FIL-03`/`FIL-04` (manifest, hash gate, filename sanitisation),
+`SEC-01`–`SEC-03`/`SEC-05` (bounds, overflow discipline, fuzzing), `CV-01`–`CV-04` (detection,
+tracking, sampling, photometric field) and `SIM-01`/`SIM-04`/`SIM-05` (simulator, replay harness,
+`CaptureSource`).
+
+### Why it happened, and why it will happen again
+
+CONTRIBUTING says to update the registry whenever a document or subsystem changes. That rule is
+followed for *documents* — the findings file, ADRs and open questions all stayed current — and
+skipped for *code*, because the registry is not where the work happens and nothing fails when it
+goes stale. There is no test for it. RISK-020 tracks exactly this, and F10 was caught by it, and it
+happened anyway across thirty entries.
+
+**The recurrence rate is the real finding.** In this single day:
+
+- The "no geometric pipeline / no payload FEC" claims in this file's own *not validated* list were
+  corrected (2026-08-03) — both had been false for a day.
+- The replacement text, *"No device code at all… the single most important gap"*, went false hours
+  later when the probe ran (F27).
+- Its replacement, saying delivery and distinctness were still unmeasured, went false **the same
+  day** (F28).
+
+So the same section was wrong three times in about thirty hours, each time in the direction of
+understating progress. A periodic review is not optional bookkeeping; it is the only mechanism that
+catches this, and `DOC-05` is re-scoped from a one-off task to a recurring one.
+
+### The correction, and what it deliberately did not do
+
+Every relabelled entry was checked against a source file plus its tests. Two distinctions were
+introduced because the single `Planned`/`Done` axis could not express the truth:
+
+- **Implemented** (code exists and is tested) is now kept separate from **acceptance met** (the
+  experiment named on the entry's own acceptance line has run). Most acceptance criteria here need
+  hardware or an unrun experiment, so implemented rarely implies accepted — `CV-03` has a working
+  sampler and no swept interior margin; `MOD-06` has a working LLR path whose calibration test
+  *cannot* pass at M0 because there are no errors to calibrate against.
+- Entries that are **not built as specified** now say so rather than staying vaguely `Planned`:
+  `FIL-02` reassembles in memory with no temp file and no streaming, which is fine at test sizes and
+  not fine against the 4 GB bound the manifest already permits; `SIM-02`'s config files do not
+  exist; `BEN-01` exists in the simulator only, with no C15 telemetry system behind it;
+  `FEC-04` soft-input decoding is **deliberately** absent, because F18/F19 showed the value was in
+  erasure *positions* rather than in LLR magnitudes.
+
+**Under-claiming is not the safe direction.** It reads as modesty, and it is the failure mode that
+makes someone rebuild a working subsystem or distrust a finding that was sound.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.
