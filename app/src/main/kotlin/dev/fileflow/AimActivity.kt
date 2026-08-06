@@ -20,7 +20,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
-import dev.fileflow.aim.AspectFrameLayout
+import dev.fileflow.aim.CameraPreviewView
 import dev.fileflow.capture.CameraRecorder
 
 /**
@@ -60,7 +60,7 @@ class AimActivity : AppCompatActivity() {
     private var gridRows = 260
     private var captureMaxWidth = 1920
     private var previewSurface: android.view.Surface? = null
-    private var previewFrame: AspectFrameLayout? = null
+    private var previewView: CameraPreviewView? = null
     private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,7 +79,7 @@ class AimActivity : AppCompatActivity() {
         view = v
         // Live preview behind the analysis overlay. Without it the screen shows what is wrong but
         // not where the camera is pointing, which is not something an operator can aim with (F37).
-        val preview = SurfaceView(this)
+        val preview = CameraPreviewView(this)
         // The preview is LETTERBOXED, not stretched.
         //
         // A rear camera delivers landscape frames and the phone is held portrait, so filling the
@@ -87,30 +87,23 @@ class AimActivity : AppCompatActivity() {
         // moves the phone and judges the result -- so a preview with the wrong proportions is an
         // actively misleading instrument, not merely an ugly one: a screen that looks centred is
         // not centred (F38).
-        // The overlay goes INSIDE the letterboxed box, so its canvas is exactly the preview
-        // rectangle and the detected outline lands on the image it describes. Making it a sibling
-        // produced two boxes in different places -- the camera view centred and a separate schematic
-        // snapped to the top -- which an operator reported, correctly, as impossible to reconcile
-        // (F38).
-        val previewBox = AspectFrameLayout(this).apply {
-            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        }
-        previewFrame = previewBox
+        // Both views fill the screen; the PREVIEW letterboxes its own image via its transform, and
+        // the overlay is told the resulting content rectangle so it draws onto the image rather than
+        // beside it.
+        //
+        // The container that used to letterbox the preview is gone. It could size a box but never
+        // turn the pixels, so a landscape sensor stream stayed squashed inside a portrait box no
+        // matter what shape the box was -- which is why the operator reported the same stretch after
+        // two separate "fixes" (F42).
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
-            addView(
-                previewBox,
-                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER),
-            )
+            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
-        preview.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                if (!started) { started = true; startAnalysing(holder.surface) }
-            }
-            override fun surfaceChanged(h: SurfaceHolder, fmt: Int, w: Int, ht: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {}
-        })
+        preview.onSurfaceReady = { surface ->
+            if (!started) { started = true; startAnalysing(surface) }
+        }
+        previewView = preview
     }
 
     private fun startAnalysing(surface: android.view.Surface) {
@@ -182,8 +175,13 @@ class AimActivity : AppCompatActivity() {
                     } }
                     // Frame dimensions are known only once frames arrive, so the preview's shape is
                     // corrected here rather than guessed at layout time.
-                    previewFrame?.let { box ->
-                        runOnUiThread { box.setAspect(w, h, rec.sensorOrientation) }
+                    previewView?.let { pv ->
+                        runOnUiThread {
+                            // Rotation AND proportions, in one place: a SurfaceView could do neither
+                            // (F42).
+                            pv.setCameraGeometry(w, h, rec.sensorOrientation)
+                            view?.contentRect = pv.contentRect()
+                        }
                     }
                     val now = System.currentTimeMillis()
                     if (now - lastAnalysisMs >= ANALYSE_INTERVAL_MS) {

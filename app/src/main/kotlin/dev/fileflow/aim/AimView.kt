@@ -44,6 +44,17 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     var sensorRotation: Int = 0
         set(v) { field = ((v % 360) + 360) % 360; postInvalidate() }
 
+    /**
+     * The rectangle the PREVIEW's image actually occupies within this view.
+     *
+     * The preview fits its image and letterboxes the remainder, so the image is generally smaller
+     * than the view. Drawing the detected outline against the full view instead of against this
+     * rectangle would put it beside the thing it describes — the misregistration that made an
+     * earlier build show two boxes in different places (F38).
+     */
+    var contentRect: android.graphics.RectF? = null
+        set(v) { field = v; postInvalidate() }
+
     private var aim: Aim? = null
     private var frameW = 0
     private var frameH = 0
@@ -123,11 +134,14 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val quarter = sensorRotation == 90 || sensorRotation == 270
         val dispW = (if (quarter) frameH else frameW).coerceAtLeast(1)
         val dispH = (if (quarter) frameW else frameH).coerceAtLeast(1)
-        val scale = minOf(width.toFloat() / dispW, height.toFloat() / dispH)
-        // Any residual letterbox inside this view, if the box's aspect and the frame's disagree by a
-        // rounding pixel. Centring the remainder keeps the overlay registered to the image.
-        val ox = (width - dispW * scale) / 2f
-        val oy = (height - dispH * scale) / 2f
+        // Register to the PREVIEW's fitted rectangle when it is known, falling back to this view's
+        // own bounds when it is not.
+        val cr = contentRect
+        val areaW = cr?.width() ?: width.toFloat()
+        val areaH = cr?.height() ?: height.toFloat()
+        val scale = minOf(areaW / dispW, areaH / dispH)
+        val ox = (cr?.left ?: 0f) + (areaW - dispW * scale) / 2f
+        val oy = (cr?.top ?: 0f) + (areaH - dispH * scale) / 2f
 
         val colour = when (a.verdict) {
             AimVerdict.Ready -> Color.parseColor("#69F0AE")
@@ -173,12 +187,16 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
             90 -> a.clippedTop; 180 -> a.clippedLeft; 270 -> a.clippedBottom
             else -> a.clippedRight
         }
-        val w = width.toFloat()
-        val h = height.toFloat()
-        if (top) canvas.drawLine(0f, 0f, w, 0f, edgePaint)
-        if (bottom) canvas.drawLine(0f, h, w, h, edgePaint)
-        if (left) canvas.drawLine(0f, 0f, 0f, h, edgePaint)
-        if (right) canvas.drawLine(w, 0f, w, h, edgePaint)
+        // On the IMAGE's edges, not the view's: with letterbox bars present those are different
+        // lines, and marking the wrong one points at empty space.
+        val l = ox
+        val t = oy
+        val rr = ox + dispW * scale
+        val bb = oy + dispH * scale
+        if (top) canvas.drawLine(l, t, rr, t, edgePaint)
+        if (bottom) canvas.drawLine(l, bb, rr, bb, edgePaint)
+        if (left) canvas.drawLine(l, t, l, bb, edgePaint)
+        if (right) canvas.drawLine(rr, t, rr, bb, edgePaint)
 
         val facts = listOf(
             "px/cell %.1f    rotation %.0f°    screen %.0f%%".format(
