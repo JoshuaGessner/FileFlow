@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
+import dev.fileflow.aim.AspectFrameLayout
 import dev.fileflow.capture.CameraRecorder
 import java.io.File
 
@@ -42,6 +43,7 @@ class CaptureActivity : AppCompatActivity() {
 
     private lateinit var text: TextView
     private var aimView: AimView? = null
+    private var aimPreviewFrame: dev.fileflow.aim.AspectFrameLayout? = null
     private var aimRecorder: CameraRecorder? = null
     private var aimThread: Thread? = null
 
@@ -115,9 +117,23 @@ class CaptureActivity : AppCompatActivity() {
         // change (F37). The preview is a second target on the same capture session, so the compositor
         // scales and colour-converts it and none of the analysis budget goes on it.
         val preview = SurfaceView(this)
-        setContentView(FrameLayout(this).apply {
+        // Letterboxed, with the overlay INSIDE it.
+        //
+        // Filling a portrait view with a landscape camera stream squashes it, and aiming is a visual
+        // feedback loop -- wrong proportions make a screen that looks centred not be centred. Nesting
+        // the overlay in the same box registers the detected outline onto the image instead of
+        // drawing a second, differently-placed schematic beside it (F38).
+        val previewBox = AspectFrameLayout(this).apply {
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        }
+        aimPreviewFrame = previewBox
+        setContentView(FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            addView(
+                previewBox,
+                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, android.view.Gravity.CENTER),
+            )
         })
 
         // The camera cannot be configured against a surface that does not exist yet, so the aiming
@@ -150,6 +166,15 @@ class CaptureActivity : AppCompatActivity() {
                 rig = CameraRecorder.RigMetadata(gridCols = cols, gridRows = rows),
                 previewSurface = previewSurface,
                 onFrame = { buf, w, h, stride ->
+                    // The schematic has to be drawn in DISPLAY space, and the rotation that puts it
+                    // there is known only once the camera is open (F38).
+                    if (v.sensorRotation != rec.sensorOrientation) {
+                        v.sensorRotation = rec.sensorOrientation
+                    }
+                    // Frame dimensions arrive with the frames, so the box is shaped here.
+                    aimPreviewFrame?.let { box ->
+                        runOnUiThread { box.setAspect(w, h, rec.sensorOrientation) }
+                    }
                     val now = System.currentTimeMillis()
                     if (!handedOver && now - lastMs >= AIM_INTERVAL_MS) {
                         lastMs = now

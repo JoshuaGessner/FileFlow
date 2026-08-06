@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.os.Bundle
 import android.util.Log
 import android.view.SurfaceHolder
+import android.view.Gravity
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -19,6 +20,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
+import dev.fileflow.aim.AspectFrameLayout
 import dev.fileflow.capture.CameraRecorder
 
 /**
@@ -58,6 +60,7 @@ class AimActivity : AppCompatActivity() {
     private var gridRows = 260
     private var captureMaxWidth = 1920
     private var previewSurface: android.view.Surface? = null
+    private var previewFrame: AspectFrameLayout? = null
     private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,9 +80,29 @@ class AimActivity : AppCompatActivity() {
         // Live preview behind the analysis overlay. Without it the screen shows what is wrong but
         // not where the camera is pointing, which is not something an operator can aim with (F37).
         val preview = SurfaceView(this)
-        setContentView(FrameLayout(this).apply {
+        // The preview is LETTERBOXED, not stretched.
+        //
+        // A rear camera delivers landscape frames and the phone is held portrait, so filling the
+        // view squashed the stream vertically. Aiming is a visual feedback loop -- the operator
+        // moves the phone and judges the result -- so a preview with the wrong proportions is an
+        // actively misleading instrument, not merely an ugly one: a screen that looks centred is
+        // not centred (F38).
+        // The overlay goes INSIDE the letterboxed box, so its canvas is exactly the preview
+        // rectangle and the detected outline lands on the image it describes. Making it a sibling
+        // produced two boxes in different places -- the camera view centred and a separate schematic
+        // snapped to the top -- which an operator reported, correctly, as impossible to reconcile
+        // (F38).
+        val previewBox = AspectFrameLayout(this).apply {
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        }
+        previewFrame = previewBox
+        setContentView(FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            addView(
+                previewBox,
+                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER),
+            )
         })
         preview.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -142,6 +165,16 @@ class AimActivity : AppCompatActivity() {
                 writeFrames = false,            // nothing is recorded; this is guidance only
                 rig = CameraRecorder.RigMetadata(gridCols = cols, gridRows = rows),
                 onFrame = { buf, w, h, stride ->
+                    // Known only once the camera is open, so it is picked up here rather than at
+                    // construction. Idempotent and cheap; the view repaints only when it changes.
+                    view?.let { if (it.sensorRotation != rec.sensorOrientation) {
+                        it.sensorRotation = rec.sensorOrientation
+                    } }
+                    // Frame dimensions are known only once frames arrive, so the preview's shape is
+                    // corrected here rather than guessed at layout time.
+                    previewFrame?.let { box ->
+                        runOnUiThread { box.setAspect(w, h, rec.sensorOrientation) }
+                    }
                     val now = System.currentTimeMillis()
                     if (now - lastAnalysisMs >= ANALYSE_INTERVAL_MS) {
                         lastAnalysisMs = now

@@ -81,8 +81,8 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
                                            jint nsym, jint payload_bytes, jlong seed) {
-    if (cols <= 0 || rows <= 0 || payload_bytes <= 0) {
-        ThrowIllegalState(env, "cols, rows and payloadBytes must all be positive");
+    if (cols <= 0 || rows <= 0) {
+        ThrowIllegalState(env, "cols and rows must both be positive");
         return 0;
     }
 
@@ -136,7 +136,22 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
         return 0;
     }
 
-    std::vector<std::uint8_t> payload(static_cast<std::size_t>(payload_bytes));
+    // `payload_bytes <= 0` means FILL THE BLOCK exactly.
+    //
+    // A payload that does not fill its block leaves the trailing source symbols entirely ZERO, and a
+    // zero symbol renders as an almost-black optical frame. Measured on this rig: 131,072 bytes into
+    // a 64 x 3,122 byte block left 22 of 64 symbols empty, and the capture showed bursts of frames
+    // at mean luminance 8.6 against 48 for the rest.
+    //
+    // That is the F15 mechanism again -- payload content changing what the receiver sees -- and it
+    // confounds every optical measurement taken across it. Filling the block removes the confound at
+    // the source rather than teaching each downstream component to tolerate it, and it also removes
+    // the ~27% padding waste F4 recorded.
+    const std::size_t block_capacity =
+        static_cast<std::size_t>(symbol_size) * 64u;  // 64 = block_symbols below
+    const std::size_t want = payload_bytes > 0 ? static_cast<std::size_t>(payload_bytes)
+                                               : block_capacity;
+    std::vector<std::uint8_t> payload(want);
     fileflow::SplitMix64 prng(static_cast<std::uint64_t>(seed) ^ 0xF11EF10ULL);
     for (auto& b : payload) b = static_cast<std::uint8_t>(prng.Next() & 0xFF);
 

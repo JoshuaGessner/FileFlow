@@ -27,6 +27,9 @@ Status AimConfig::Validate() const noexcept {
         return Error::kValueOutOfRange;
     }
     if (max_mid_fraction <= 0.0 || max_mid_fraction > 1.0) return Error::kValueOutOfRange;
+    if (min_level_separation <= 0.0 || min_level_separation > 255.0) {
+        return Error::kValueOutOfRange;
+    }
     if (histogram_stride <= 0) return Error::kValueOutOfRange;
     return Status::Ok();
 }
@@ -232,7 +235,10 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     }
     const double interior = static_cast<double>(dark + bright + mid);
     a.mid_fraction = interior > 0.0 ? static_cast<double>(mid) / interior : 1.0;
-    const double bright_frac = interior > 0.0 ? static_cast<double>(bright) / interior : 0.0;
+    // Reported, never gated on. It is a property of the PAYLOAD -- a zero fountain symbol renders
+    // almost entirely dark -- so it is useful for a human reading a report and unusable as a
+    // pass/fail criterion (F39).
+    a.bright_fraction = interior > 0.0 ? static_cast<double>(bright) / interior : 0.0;
 
     // --- the verdict, in fix-this-first order ---
     //
@@ -268,14 +274,27 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     // cells that should be black are no longer distinguishable from those that should be white. On
     // the first two-device capture the interior came back 66% bright against 9% dark (F33), which is
     // what "the dark cells washed out" looks like as a number.
-    if (split.bright_mean < kMinBrightLevel || bright_frac < cfg.min_bright_fraction) {
+    // Judged on LEVELS and their separation, never on how much of the screen happens to be lit.
+    //
+    // The lit fraction is a property of the PAYLOAD. A frame carrying a zero fountain symbol is
+    // legitimately almost all dark -- only the boundary ring, corner markers and pilots are lit --
+    // and it is perfectly decodable. Gating on `bright_frac` therefore reported "too dark" for good
+    // frames, and made the verdict flicker as the transmitter cycled through its symbols: measured
+    // on this rig, 22 of 64 source symbols were zero-padded and produced bursts of frames at mean
+    // luminance 8.6 against 48 for the rest.
+    //
+    // That is F15's rule -- nothing the receiver does may depend on payload content -- broken again
+    // in a new component (F39). The levels themselves are payload-independent: the pilot lattice and
+    // boundary ring are present in every frame by construction, so Otsu still finds both classes.
+    if (split.bright_mean < kMinBrightLevel) {
         a.verdict = AimVerdict::kTooDark;
         a.guidance = "Too dark — turn the sender's brightness up, or reduce room light behind it.";
         return a;
     }
-    if (split.dark_mean > kMaxDarkLevel || bright_frac > cfg.max_bright_fraction) {
+    if (split.dark_mean > kMaxDarkLevel || separation < cfg.min_level_separation) {
         a.verdict = AimVerdict::kTooBright;
-        a.guidance = "Too bright — the dark cells are washing out. Lower the sender's brightness.";
+        a.guidance = "Too bright — the light and dark cells are washing together. Lower the "
+                     "sender's brightness.";
         return a;
     }
 

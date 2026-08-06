@@ -44,6 +44,18 @@ import java.util.concurrent.TimeUnit
 class CameraRecorder(private val context: Context) {
 
     /**
+     * `SENSOR_ORIENTATION` for the camera in use: clockwise degrees to turn a sensor frame into the
+     * device's natural display orientation. 90 on both reference devices' rear cameras.
+     *
+     * Anything that draws camera coordinates on screen needs this. Without it the aim schematic was
+     * drawn in SENSOR space while the operator held the phone in DISPLAY space, so moving the phone
+     * left moved the box up -- reported, accurately, as impossible to line up with (F38).
+     */
+    @Volatile
+    var sensorOrientation: Int = 0
+        private set
+
+    /**
      * Set to stop an unbounded run. Checked on the camera callback thread.
      *
      * `@Volatile` rather than a lock: it is written from the UI thread and read from the camera
@@ -245,6 +257,7 @@ class CameraRecorder(private val context: Context) {
             ?: return failure("no camera on this device")
 
         val chars = mgr.getCameraCharacteristics(cameraId)
+        sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return failure("no stream configuration map", cameraId)
 

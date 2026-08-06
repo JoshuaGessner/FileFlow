@@ -75,6 +75,8 @@ struct AimAdvice {
     // Fraction of interior pixels that are neither clearly dark nor clearly bright. High means the
     // cell edges are smeared -- defocus, or a pitch below what the optics resolve.
     double mid_fraction = 0.0;
+    /** Share of interior pixels at the bright level. Diagnostic only — payload-dependent (F39). */
+    double bright_fraction = 0.0;
 
     // One imperative sentence for a user, naming the ACTION rather than the measurement.
     std::string guidance;
@@ -104,8 +106,21 @@ struct AimConfig {
     double target_margin = 0.06;
     // Exposure guards. A frame with almost everything on one side of the threshold has no second
     // level left to estimate, and the photometric field needs both (F7).
-    double min_bright_fraction = 0.10;
-    double max_bright_fraction = 0.80;
+    // Lit fraction is NOT a usable floor: it depends on the payload.
+    //
+    // A frame carrying a zero fountain symbol is legitimately almost all dark -- only the boundary
+    // ring, corner markers and pilots are lit -- and it is a perfectly decodable frame. Judging aim
+    // by how much of the screen is bright therefore reports "too dark" for a frame that is fine,
+    // which is F15's lesson (localisation must never depend on payload content) reappearing in the
+    // aiming analyser. Kept only as a floor against a frame with no lit structure at all.
+    double min_bright_fraction = 0.01;
+    double max_bright_fraction = 0.98;
+
+    // What actually decides readability, and it is payload-independent: the DISTANCE between the two
+    // luminance levels. A frame can be 5% lit or 60% lit and be equally readable, provided the lit
+    // and unlit levels are far apart. Overexposure is the case where they collapse together at the
+    // top of the range, and that is what this catches.
+    double min_level_separation = 40.0;
     double max_mid_fraction = 0.45;
     // Sampling stride for the threshold histogram. The full pass is for the bounding box; the
     // threshold does not need every pixel and paying for it would put this out of reach of a

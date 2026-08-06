@@ -186,16 +186,50 @@ TEST(AimAnalysis, TooFarWhenThePitchIsUnresolvable) {
 }
 
 TEST(AimAnalysis, DetectsOverexposure) {
-    // What the first two-device capture actually looked like: ISO 400 at a full-brightness OLED came
-    // back 66% bright against 9% dark (F33). Overexposure destroys the DARK level, and the
-    // photometric field needs both levels to place a threshold (F7).
-    // 90% of cells bright: the dark cells have washed out, which is what overexposure looks like
-    // as a measurement rather than simply a brighter picture.
-    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 235, 30, 0.90);
+    // Overexposure is the two LEVELS converging, not more cells being lit.
+    //
+    // This test used to model it as "90% of cells bright" with the dark level still at 30 -- which
+    // contradicted its own comment ("overexposure destroys the DARK level") and, worse, encoded a
+    // payload property as an exposure fault. A frame is legitimately 90% bright whenever the payload
+    // says so. The check it was pinning had to be removed for exactly that reason (F39), and this
+    // test failed, correctly, as soon as it was.
+    //
+    // Real overexposure: the dark cells lift toward the bright ones until no threshold separates
+    // them. Measured on the first two-device capture as 66% bright against 9% dark with the
+    // photometric field unable to place a reference (F33).
+    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 250, 205);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     EXPECT_EQ(r.value().verdict, AimVerdict::kTooBright) << r.value().guidance;
     EXPECT_NE(r.value().guidance.find("brightness"), std::string::npos);
+}
+
+TEST(AimAnalysis, AMostlyDarkPayloadIsNotAnAimingFault) {
+    // F15's rule, in the aiming analyser: nothing may depend on payload content.
+    //
+    // A frame carrying a ZERO fountain symbol is almost entirely dark -- only the boundary ring,
+    // corner markers and pilots are lit -- and it is perfectly decodable. On real hardware 22 of 64
+    // source symbols were zero-padded, producing bursts of frames at mean luminance 8.6 against 48
+    // for the rest, and the analyser called every one of them "too dark". The verdict flickered
+    // between Ready and TooDark several times a second on a stationary rig, which is unusable
+    // guidance and sent the operator looking for a fault that was not there (F39).
+    //
+    // 8% of cells lit, with both levels healthy and far apart.
+    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 230, 12, 0.08);
+    auto r = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(r.ok());
+    EXPECT_NE(r.value().verdict, AimVerdict::kTooDark)
+        << "a sparse payload is not a dark screen: " << r.value().guidance;
+    EXPECT_GT(r.value().px_per_cell, 4.0);
+}
+
+TEST(AimAnalysis, AMostlyBrightPayloadIsNotOverexposure) {
+    // The same rule from the other side. 92% of cells lit, levels still far apart.
+    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 230, 12, 0.92);
+    auto r = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(r.ok());
+    EXPECT_NE(r.value().verdict, AimVerdict::kTooBright)
+        << "a dense payload is not an overexposed screen: " << r.value().guidance;
 }
 
 TEST(AimAnalysis, AcceptsAWellFramedSharpScreen) {
