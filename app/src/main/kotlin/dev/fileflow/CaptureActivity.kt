@@ -5,8 +5,6 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -17,7 +15,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
-import dev.fileflow.aim.AspectFrameLayout
+import dev.fileflow.aim.CameraPreviewView
 import dev.fileflow.capture.CameraRecorder
 import java.io.File
 
@@ -43,7 +41,7 @@ class CaptureActivity : AppCompatActivity() {
 
     private lateinit var text: TextView
     private var aimView: AimView? = null
-    private var aimPreviewFrame: dev.fileflow.aim.AspectFrameLayout? = null
+    private var previewView: CameraPreviewView? = null
     /** Focus the aim phase settled on; carried into the recording so it stops hunting. */
     private var lockedFocus: Float = -1f
     private var aimRecorder: CameraRecorder? = null
@@ -118,35 +116,29 @@ class CaptureActivity : AppCompatActivity() {
         // is POINTING, so lining two phones up meant moving them blind and waiting for the verdict to
         // change (F37). The preview is a second target on the same capture session, so the compositor
         // scales and colour-converts it and none of the analysis budget goes on it.
-        val preview = SurfaceView(this)
-        // Letterboxed, with the overlay INSIDE it.
         //
-        // Filling a portrait view with a landscape camera stream squashes it, and aiming is a visual
-        // feedback loop -- wrong proportions make a screen that looks centred not be centred. Nesting
-        // the overlay in the same box registers the detected outline onto the image instead of
-        // drawing a second, differently-placed schematic beside it (F38).
-        val previewBox = AspectFrameLayout(this).apply {
-            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        }
-        aimPreviewFrame = previewBox
+        // The SAME preview class the standalone aiming screen uses.
+        //
+        // This screen is what the Receive button opens, so it is the one an operator actually looks
+        // at -- and it was the last holdout still using a SurfaceView inside a self-sizing box. That
+        // arrangement can shape a container but cannot turn the pixels inside it, so a landscape
+        // sensor stream stayed squashed however the box was shaped. Four rounds of "fixed the
+        // preview" landed on the standalone screen while the reported stretch was here, in the path
+        // nobody was testing. Two implementations of one thing meant a fix could look verified and
+        // change nothing the operator saw, so there is now exactly one (F43).
+        val preview = CameraPreviewView(this)
+        previewView = preview
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
-            addView(
-                previewBox,
-                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, android.view.Gravity.CENTER),
-            )
+            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
 
         // The camera cannot be configured against a surface that does not exist yet, so the aiming
         // run starts from the surface callback rather than immediately.
-        preview.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                if (aimThread == null) runAiming(cols, rows, v, holder.surface)
-            }
-            override fun surfaceChanged(h: SurfaceHolder, fmt: Int, w: Int, ht: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {}
-        })
+        preview.onSurfaceReady = { surface ->
+            if (aimThread == null) runAiming(cols, rows, v, surface)
+        }
     }
 
     private fun runAiming(cols: Int, rows: Int, v: AimView, previewSurface: android.view.Surface) {
@@ -173,9 +165,14 @@ class CaptureActivity : AppCompatActivity() {
                     if (v.sensorRotation != rec.sensorOrientation) {
                         v.sensorRotation = rec.sensorOrientation
                     }
-                    // Frame dimensions arrive with the frames, so the box is shaped here.
-                    aimPreviewFrame?.let { box ->
-                        runOnUiThread { box.setAspect(w, h, rec.sensorOrientation) }
+                    // Frame dimensions arrive with the frames, so the preview's geometry is
+                    // set here. The overlay is then told the rectangle the image actually occupies,
+                    // so the guidance boxes land ON the image rather than beside it.
+                    previewView?.let { pv ->
+                        runOnUiThread {
+                            pv.setCameraGeometry(w, h, rec.sensorOrientation)
+                            v.contentRect = pv.contentRect()
+                        }
                     }
                     val now = System.currentTimeMillis()
                     if (!handedOver && now - lastMs >= AIM_INTERVAL_MS) {
