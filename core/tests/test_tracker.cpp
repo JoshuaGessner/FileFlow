@@ -445,3 +445,75 @@ TEST(ScreenTracker, HandlesAnEmptyImageWithoutLyingOrCrashing) {
     EXPECT_FALSE(r.ok);
     EXPECT_EQ(tr.value().last_pixels_examined(), 0u);
 }
+
+TEST(ScreenTracker, RefinesAScreenThatIsROTATEDInTheImage) {
+    // Regression for F37, and the reason it escaped every existing test.
+    //
+    // Refinement rebuilds its quad from raw image extremes -- GEOMETRIC order -- while `last_quad_`
+    // comes from the detector in GRID order, after the four-fold ambiguity has been resolved. Those
+    // two orderings coincide only when the resolved rotation is zero, which is the case every test
+    // here already covered and the case the simulator's upright render produces. On a real capture
+    // the phones sat sideways in the sensor frame, the orderings differed by a quarter-turn, and
+    // refinement failed 60 times out of 60 while reporting nothing worse than "corner jump".
+    //
+    // Presenting the screen at each of the four quarter-turns is therefore the whole point: an
+    // upright screen cannot detect this bug.
+    const int w = 320, h = 320;  // square, so a quarter-turn cannot change what fits in frame
+    const auto upright = QuadAt(160, 160, 110, 110);
+
+    for (int turn = 0; turn < 4; ++turn) {
+        const FrameLayout layout = MakeLayout();
+        auto tr_r = ScreenTracker::Create(layout, TrackerConfig{});
+        ASSERT_TRUE(tr_r.ok());
+        ScreenTracker tracker = std::move(tr_r).value();
+
+        // Cyclically shifting which IMAGE corner each grid corner maps to presents the same screen
+        // rotated by `turn` quarter-turns, which is what the detector then has to resolve.
+        std::array<Point2, 4> quad{};
+        for (std::size_t i = 0; i < 4; ++i) {
+            quad[i] = upright[(i + static_cast<std::size_t>(turn)) % 4];
+        }
+
+        // A STATIC scene: identical geometry both frames, only the payload differs. That makes it
+        // the easiest possible case for refinement, so a failure is unambiguously the tracker's.
+        const Image8 first = Scene(RenderFrame(layout, 11), quad, w, h);
+        ASSERT_TRUE(tracker.Track(first.view()).ok) << "turn " << turn << ": acquisition";
+        ASSERT_EQ(tracker.full_acquisitions(), 1u);
+
+        const Image8 second = Scene(RenderFrame(layout, 12), quad, w, h);
+        const TrackResult t = tracker.Track(second.view());
+        ASSERT_TRUE(t.ok) << "turn " << turn << ": second frame";
+
+        EXPECT_EQ(tracker.refined_frames(), 1u)
+            << "turn " << turn << ": the second frame of an unmoving screen must REFINE rather than "
+               "pay another full acquisition";
+        EXPECT_EQ(tracker.full_acquisitions(), 1u)
+            << "turn " << turn << ": a refined frame must not also acquire";
+        EXPECT_EQ(tracker.refine_rejects_corner_jump(), 0u)
+            << "turn " << turn << ": the corners of an unmoving screen cannot have jumped";
+    }
+}
+
+TEST(ScreenTracker, ResetClearsTheResolvedRotation) {
+    // A rotation carried across a session boundary would be applied to a screen that may now be held
+    // the other way up, mismatching every corner -- F37 reintroduced by the back door.
+    const int w = 320, h = 320;
+    const auto upright = QuadAt(160, 160, 110, 110);
+    const FrameLayout layout = MakeLayout();
+    auto tr_r = ScreenTracker::Create(layout, TrackerConfig{});
+    ASSERT_TRUE(tr_r.ok());
+    ScreenTracker tracker = std::move(tr_r).value();
+
+    // Lock onto a screen presented at one quarter-turn.
+    std::array<Point2, 4> turned{};
+    for (std::size_t i = 0; i < 4; ++i) turned[i] = upright[(i + 1) % 4];
+    ASSERT_TRUE(tracker.Track(Scene(RenderFrame(layout, 21), turned, w, h).view()).ok);
+
+    // New session, screen now upright. Reacquisition must resolve the rotation afresh.
+    tracker.Reset();
+    ASSERT_TRUE(tracker.Track(Scene(RenderFrame(layout, 22), upright, w, h).view()).ok);
+    const TrackResult t = tracker.Track(Scene(RenderFrame(layout, 23), upright, w, h).view());
+    ASSERT_TRUE(t.ok);
+    EXPECT_GT(tracker.refined_frames(), 0u)
+        << "a stale rotation would make every corner look displaced";
+}

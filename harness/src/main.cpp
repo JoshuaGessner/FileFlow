@@ -209,6 +209,21 @@ int main(int argc, char** argv) {
         // decided node by node and the failures cluster spatially.
         std::printf("nodes below separation   %.4f of lattice\n", d.fraction_low_separation());
         std::printf("nodes over residual      %.4f of lattice\n", d.fraction_high_residual());
+
+        // Why the tracker never refined. Without this, "refined frames 0" is a dead end: four
+        // different gates produce it and they need opposite fixes.
+        const ScreenTracker& tr = src.pipeline().tracker();
+        std::printf("\n--- why refinement was rejected (ADR-0006's fast path) ---\n");
+        std::printf("no extremes in window    %llu\n",
+                    static_cast<unsigned long long>(tr.refine_rejects_no_extremes()));
+        std::printf("corner jump too large    %llu  (bound %.2f of quad scale)\n",
+                    static_cast<unsigned long long>(tr.refine_rejects_corner_jump()),
+                    cfg.tracker.max_corner_jump);
+        std::printf("homography degenerate    %llu\n",
+                    static_cast<unsigned long long>(tr.refine_rejects_homography()));
+        std::printf("marker score too low     %llu  (needed %.2f, best rejected %.3f)\n",
+                    static_cast<unsigned long long>(tr.refine_rejects_marker_score()),
+                    cfg.tracker.detection.min_marker_score, tr.worst_rejected_score());
         if (erasure > 0.5) {
             std::printf("\n  READING THIS: a high erasure rate is two different problems.\n");
             if (d.mean_separation() < cfg.photometric.min_separation * 2.0) {

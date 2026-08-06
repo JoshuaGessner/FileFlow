@@ -86,6 +86,21 @@ class ScreenTracker {
     // Frames resolved by local refinement alone -- the tracker actually doing its job.
     [[nodiscard]] std::uint64_t refined_frames() const noexcept { return refined_; }
 
+    // WHY refinement was rejected, per gate.
+    //
+    // Four separate conditions send `RefineLocally` back to a full acquisition, and a bare
+    // "refined_frames 0" cannot distinguish them -- which is exactly the situation on real captures,
+    // where refinement failed 60 times out of 60 while the simulator refines happily (F13). The four
+    // causes call for completely different fixes: no extremes means the window missed the boundary,
+    // a corner jump means the plausibility bound is too tight for real inter-frame motion, and a low
+    // marker score means the refined geometry is genuinely wrong.
+    [[nodiscard]] std::uint64_t refine_rejects_no_extremes() const noexcept { return rj_extremes_; }
+    [[nodiscard]] std::uint64_t refine_rejects_corner_jump() const noexcept { return rj_jump_; }
+    [[nodiscard]] std::uint64_t refine_rejects_homography() const noexcept { return rj_homography_; }
+    [[nodiscard]] std::uint64_t refine_rejects_marker_score() const noexcept { return rj_score_; }
+    /** Worst marker score seen from a refinement that was rejected for it. */
+    [[nodiscard]] double worst_rejected_score() const noexcept { return worst_rj_score_; }
+
     [[nodiscard]] std::uint64_t full_acquisitions() const noexcept { return acquisitions_; }
     [[nodiscard]] std::uint64_t losses() const noexcept { return losses_; }
 
@@ -107,6 +122,16 @@ class ScreenTracker {
 
     TrackState state_ = TrackState::kSearching;
     std::array<Point2, 4> last_quad_{};
+
+    // Quarter-turns the ACQUISITION applied to align the geometric quad with the grid.
+    //
+    // This has to be carried into refinement, and its absence was a real bug (F37). `Detect`
+    // resolves the four-fold ambiguity by scoring all four rotations and stores the WINNING one --
+    // so `last_quad_` is in grid order, not geometric order. Refinement rebuilds a quad from raw
+    // image extremes, which is geometric order. Comparing the two without re-applying this rotation
+    // compares mismatched corners, and on a screen rotated in the sensor frame that made every
+    // corner appear to have jumped most of the screen's width.
+    int rotation_ = 0;
     int degraded_run_ = 0;
 
     // Binarisation level carried forward from the last acquisition.
@@ -121,6 +146,11 @@ class ScreenTracker {
 
     std::uint64_t successful_ = 0;
     std::uint64_t refined_ = 0;
+    std::uint64_t rj_extremes_ = 0;
+    std::uint64_t rj_jump_ = 0;
+    std::uint64_t rj_homography_ = 0;
+    std::uint64_t rj_score_ = 0;
+    double worst_rj_score_ = -1.0;
     std::uint64_t acquisitions_ = 0;
     std::uint64_t losses_ = 0;
     std::uint64_t last_px_ = 0;

@@ -63,6 +63,10 @@ Result<ScreenTracker> ScreenTracker::Create(const FrameLayout& layout, TrackerCo
 void ScreenTracker::Reset() noexcept {
     state_ = TrackState::kSearching;
     degraded_run_ = 0;
+    // Cleared with the lock it belongs to. A rotation carried across a session boundary would be
+    // applied to a screen that may now be held the other way up, silently mismatching every corner
+    // -- which is the F37 failure reintroduced by the back door.
+    rotation_ = 0;
 }
 
 bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
@@ -134,9 +138,24 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
     // cost and bias the ADR-0006 comparison in favour of tracking -- the direction any
     // measurement of one's own design should be most suspicious of.
     last_px_ += examined;
-    if (!e.valid()) return false;
+    if (!e.valid()) {
+        ++rj_extremes_;
+        return false;
+    }
 
-    const std::array<Point2, 4> quad{e.tl, e.tr, e.br, e.bl};
+    // Geometric order from the extremes, then rotated into GRID order using the rotation the
+    // acquisition established.
+    //
+    // Both steps are needed and for different reasons. The comparison below is against
+    // `last_quad_`, which is in grid order; and the homography maps grid corners to image points,
+    // so it needs grid order too. Skipping this made refinement fail 60 times out of 60 on a real
+    // capture while passing in simulation, because the simulator renders the screen upright where
+    // the two orderings happen to coincide (F37).
+    const std::array<Point2, 4> geometric{e.tl, e.tr, e.br, e.bl};
+    std::array<Point2, 4> quad{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        quad[i] = geometric[(i + static_cast<std::size_t>(rotation_)) % 4];
+    }
 
     // Plausibility: the screen cannot teleport between frames. This is what stops the tracker
     // snapping onto a different bright object that happens to sit inside the window.
@@ -145,7 +164,10 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
         for (std::size_t i = 0; i < 4; ++i) {
             const double jump = std::hypot(quad[i].x - last_quad_[i].x,
                                            quad[i].y - last_quad_[i].y);
-            if (jump > cfg_.max_corner_jump * scale) return false;
+            if (jump > cfg_.max_corner_jump * scale) {
+                ++rj_jump_;
+                return false;
+            }
         }
     }
 
@@ -157,13 +179,23 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
 
     auto h_full = Homography::FromCorrespondences(std::span<const Point2, 4>(grid_corners),
                                                   std::span<const Point2, 4>(quad));
-    if (!h_full.ok()) return false;
+    if (!h_full.ok()) {
+        ++rj_homography_;
+        return false;
+    }
 
     // VERIFY against the markers. Refinement without verification would drift silently, and
     // orientation is NOT rechecked here -- a tracked frame inherits the rotation established
     // at acquisition, so a low score means the geometry is wrong, not merely rotated.
     const double score = detector_.ScoreMarkers(img, h_full.value(), threshold_);
-    if (score < cfg_.detection.min_marker_score) return false;
+    if (score < cfg_.detection.min_marker_score) {
+        ++rj_score_;
+        // Kept so the gap between "nearly passed" and "hopeless" is visible. A score just under the
+        // bound means the threshold is mistuned for real optics; a score near zero means the refined
+        // geometry is wrong, and those need opposite responses.
+        if (score > worst_rj_score_) worst_rj_score_ = score;
+        return false;
+    }
 
     out->ok = true;
     out->grid_to_image = h_full.value();
@@ -230,6 +262,10 @@ TrackResult ScreenTracker::Track(const ImageView8& img) {
 
     last_quad_ = d.value().quad;
     threshold_ = d.value().threshold;  // carried into subsequent tracked frames
+    // Carried for the same reason as the threshold: refinement must reproduce the orientation the
+    // acquisition resolved, not re-derive it. A tracked frame deliberately does not rescore all four
+    // rotations -- that is what makes it cheap -- so it has to be told which one won.
+    rotation_ = d.value().rotation;
     state_ = TrackState::kTracking;
     degraded_run_ = 0;
     ++successful_;
