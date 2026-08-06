@@ -79,7 +79,10 @@ class CameraPreviewView(context: Context) : TextureView(context) {
         val vw = width.toFloat()
         val vh = height.toFloat()
         if (bufferW <= 0 || bufferH <= 0 || vw <= 0f || vh <= 0f) return RectF(0f, 0f, vw, vh)
-        val quarter = sensorRotation == 90 || sensorRotation == 270
+        // Same rotation decision as the transform, or the overlay registers to a rectangle the
+        // image does not occupy.
+        val rot = displayRotationDeg()
+        val quarter = rot == 90 || rot == 270
         val dw = (if (quarter) bufferH else bufferW).toFloat()
         val dh = (if (quarter) bufferW else bufferH).toFloat()
         val scale = minOf(vw / dw, vh / dh)
@@ -90,10 +93,33 @@ class CameraPreviewView(context: Context) : TextureView(context) {
         return RectF(left, top, left + outW, top + outH)
     }
 
+    /**
+     * Degrees to rotate the buffer CLOCKWISE to bring it upright on this display.
+     *
+     * `SENSOR_ORIENTATION` is how far the sensor is mounted clockwise relative to the device's
+     * natural orientation, so that much rotation undoes it — and the device's own rotation is then
+     * subtracted, otherwise turning the phone sideways would re-break the preview.
+     *
+     * The sign is the part worth stating: rotating by MINUS the sensor orientation leaves the image
+     * lying on its side, which is what the first version of this did (F42).
+     */
+    private fun displayRotationDeg(): Int {
+        val deviceDeg = when (display?.rotation) {
+            android.view.Surface.ROTATION_90 -> 90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        return ((sensorRotation - deviceDeg) + 360) % 360
+    }
+
     private fun applyTransform() {
         val vw = width.toFloat()
         val vh = height.toFloat()
         if (bufferW <= 0 || bufferH <= 0 || vw <= 0f || vh <= 0f) return
+
+        val rot = displayRotationDeg()
+        val quarter = rot == 90 || rot == 270
 
         // A TextureView first stretches the buffer to fill the view, then applies this matrix. So the
         // matrix has to undo that stretch, rotate, and rescale to fit -- all about the view's centre.
@@ -108,22 +134,19 @@ class CameraPreviewView(context: Context) : TextureView(context) {
         bufRect.offset(cx - bufRect.centerX(), cy - bufRect.centerY())
         m.setRectToRect(viewRect, bufRect, Matrix.ScaleToFit.FILL)
 
-        // 2. Rotate the image into display orientation. Negative because the sensor is mounted
-        //    rotated clockwise by this amount relative to the display.
-        m.postRotate(-sensorRotation.toFloat(), cx, cy)
+        // 2. Rotate CLOCKWISE to undo the sensor's mounting.
+        m.postRotate(rot.toFloat(), cx, cy)
 
-        // 3. Scale to FIT.
-        //
-        // After (1) the image sits at its native buffer size in view coordinates; after (2) a
-        // quarter-turn has swapped which way round those dimensions read. So the visible extent is
-        // dw x dh, and one uniform factor brings it inside the view. Uniform is the point: separate
-        // x and y factors are exactly the vertical squash this class exists to remove.
-        val quarter = sensorRotation == 90 || sensorRotation == 270
+        // 3. Scale to FIT. One uniform factor: separate x and y factors are exactly the squash this
+        //    class exists to remove.
         val dw = (if (quarter) bufferH else bufferW).toFloat()
         val dh = (if (quarter) bufferW else bufferH).toFloat()
         val scale = minOf(vw / dw, vh / dh)
         m.postScale(scale, scale, cx, cy)
 
+        Log.i(TAG, "transform: buffer ${bufferW}x$bufferH sensor $sensorRotation " +
+                   "device ${display?.rotation} -> rotate $rot, scale %.3f, view ${vw.toInt()}x${vh.toInt()}"
+                       .format(scale))
         setTransform(m)
     }
 
