@@ -41,28 +41,6 @@ class CameraPreviewView(context: Context) : TextureView(context) {
     /** Called once the underlying texture exists and a camera can be pointed at it. */
     var onSurfaceReady: ((Surface) -> Unit)? = null
 
-    /**
-     * Extra quarter-turns applied on top of the computed rotation, cycled by tapping.
-     *
-     * Present because reasoning about this failed four times running. The relationship between
-     * `SENSOR_ORIENTATION`, the display rotation and what a `TextureView` transform does to the
-     * buffer is genuinely easy to get backwards, and every wrong guess cost a round-trip to someone
-     * holding two phones. Letting the operator cycle it settles the question in one, and the value
-     * they land on is logged so it can become the default.
-     */
-    var rotationOffset: Int = 0
-        set(v) {
-            field = ((v % 360) + 360) % 360
-            Log.i(TAG, "rotation offset now $field (total ${displayRotationDeg()})")
-            applyTransform()
-        }
-
-    /** Cycle a quarter-turn. Returns the new TOTAL rotation being applied. */
-    fun bumpRotation(): Int {
-        rotationOffset = rotationOffset + 90
-        return displayRotationDeg()
-    }
-
     init {
         surfaceTextureListener = object : SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
@@ -116,24 +94,29 @@ class CameraPreviewView(context: Context) : TextureView(context) {
     }
 
     /**
-     * Degrees to rotate the buffer CLOCKWISE to bring it upright on this display.
+     * Degrees to rotate the buffer CLOCKWISE to bring it upright. Always upright: there is no
+     * device-rotation term and no operator override.
      *
      * `SENSOR_ORIENTATION` is how far the sensor is mounted clockwise relative to the device's
-     * natural orientation, so that much rotation undoes it — and the device's own rotation is then
-     * subtracted, otherwise turning the phone sideways would re-break the preview.
+     * natural orientation, so exactly that much rotation undoes it. The sign is the part worth
+     * stating: rotating by MINUS it leaves the image lying on its side, which is what the first
+     * version did (F42).
      *
-     * The sign is the part worth stating: rotating by MINUS the sensor orientation leaves the image
-     * lying on its side, which is what the first version of this did (F42).
+     * An earlier version also subtracted the display's rotation, so that turning the phone sideways
+     * would keep the preview upright. That term is gone, for two reasons:
+     *
+     *  - Every activity is `screenOrientation="portrait"` in the manifest, so the term is zero by
+     *    construction. What a portrait-locked activity reports for `display.rotation` when the
+     *    device is physically turned is not consistent across vendors, so reading it introduced a
+     *    device-dependent quarter-turn in exchange for nothing.
+     *  - [AimView] rotates its overlay by `sensorRotation` ALONE. Any term present here and absent
+     *    there desynchronises the guidance boxes from the image they are drawn over. Making both
+     *    the same expression means they cannot disagree.
+     *
+     * Aiming is done by lining the two phones up in a fixed portrait attitude, so an upright lock is
+     * what the task actually wants (operator instruction, 2026-08-06).
      */
-    private fun displayRotationDeg(): Int {
-        val deviceDeg = when (display?.rotation) {
-            android.view.Surface.ROTATION_90 -> 90
-            android.view.Surface.ROTATION_180 -> 180
-            android.view.Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-        return ((sensorRotation - deviceDeg) + rotationOffset + 360) % 360
-    }
+    private fun displayRotationDeg(): Int = sensorRotation
 
     private fun applyTransform() {
         val vw = width.toFloat()
