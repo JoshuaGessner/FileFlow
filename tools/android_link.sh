@@ -29,10 +29,18 @@ ANGLE_DEG="${9:--1}"
 NOTES="${10:-two-device link test}"
 # 0 = derive from the frame period. Set explicitly to sweep exposure (EXP-004).
 EXPOSURE_NS="${11:-0}"
-# Gate recording on the aim analyser reporting Ready. Off by default so a scripted run records
-# whatever is in front of it and the report says what that was -- but available, because a run that
-# refuses to record a hopeless frame beats one that produces 60 undecodable ones.
-AIM="${12:-false}"
+# Gate recording on the aim analyser reporting Ready. ON by default.
+#
+# This was off by default, with a comment observing that "a run that refuses to record a hopeless
+# frame beats one that produces 60 undecodable ones". It then produced exactly that: the rig drifted
+# between captures -- rotation from 1 to 17.6 degrees and the screen clipped at the top -- and the
+# script cheerfully recorded 60 frames of it, decoded 0, and answered nothing. The prediction was
+# already written down and the default contradicted it.
+#
+# The cost of gating is a run that waits, or refuses, when the rig is not usable. That is the
+# correct failure: a refusal is information, and 60 undecodable frames are not. Pass `false`
+# explicitly to record blind -- which is legitimate when the QUESTION is what a bad rig looks like.
+AIM="${12:-true}"
 NOTES="${NOTES//\'/}"
 
 NSYM=32
