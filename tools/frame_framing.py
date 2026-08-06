@@ -178,9 +178,24 @@ def main() -> int:
                 mid += 1
     tot = dark + brightc + mid
     frac_mid = mid / tot if tot else 1.0
-    print(f"interior (centre half) dark {dark/tot:.3f}, bright {brightc/tot:.3f}, "
+    frac_bright = brightc / tot if tot else 0.0
+    frac_dark = dark / tot if tot else 0.0
+    print(f"interior (centre half) dark {frac_dark:.3f}, bright {frac_bright:.3f}, "
           f"mid {frac_mid:.3f}")
-    if frac_mid > 0.45:
+    # Check that BOTH classes are populated before judging sharpness.
+    #
+    # A low mid-grey fraction was taken as proof that cells were resolved, and it is not: a frame
+    # that is 95% dark with 2.6% bright has almost no mid-grey and no readable cells either. That
+    # exact frame was reported as "cells ARE being resolved optically" while the decoder failed
+    # geometry on 55 of 60 frames (F36). Bimodality means two populated modes, not an empty middle.
+    if frac_bright < 0.10:
+        print("UNDEREXPOSED           almost nothing is bright: the screen is barely registering.")
+        print("                       Raise exposure or the sender's brightness. A low mid-grey")
+        print("                       fraction here means an EMPTY frame, not a sharp one.")
+    elif frac_dark < 0.10:
+        print("OVEREXPOSED            almost nothing is dark: the dark level is washing out, and")
+        print("                       the photometric field needs both levels to place a threshold.")
+    elif frac_mid > 0.45:
         print("BLURRED                most of the interior is mid-grey: the cells are not resolved.")
         print("                       Either badly out of focus or genuinely below the density")
         print("                       limit. Check the reported focus distance against the rig.")

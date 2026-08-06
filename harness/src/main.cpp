@@ -3,7 +3,9 @@
 // Reports the same metric names as ffsim so replayed and simulated runs are directly
 // comparable. The difference between the two IS the simulator's error, which is how RISK-024
 // (a simulator kinder than reality) gets measured rather than worried about.
+#include <fileflow/frame.h>
 #include <fileflow/harness/capture.h>
+#include <fileflow/modulation.h>
 #include <fileflow/modulation.h>
 
 #include <cstdio>
@@ -114,10 +116,36 @@ int main(int argc, char** argv) {
 
     std::uint64_t usable_cells = 0;
     std::uint64_t erased_cells = 0;
+
+    // Attempt the HEADER on every frame that produced cell samples.
+    //
+    // This tool used to stop at cell samples, so a run could report "37 frames decoded" while being
+    // completely unable to read a single byte. "We can see the screen" and "we can read it" are
+    // different claims and only the second leads anywhere. `H` is also a term in the goodput model
+    // and had never been measured on real optics.
+    const M0Modulator mod(layout);
+    const HeaderCodec hdr_codec;
+    std::uint64_t header_ok = 0, header_fail = 0;
+
     while (auto f = src.Next()) {
+        bool any_usable = false;
         for (const double v : f->cell_samples) {
-            if (std::isnan(v)) ++erased_cells; else ++usable_cells;
+            if (std::isnan(v)) {
+                ++erased_cells;
+            } else {
+                ++usable_cells;
+                any_usable = true;
+            }
         }
+        if (!any_usable) continue;
+
+        const PhotometricRef ref = mod.EstimateReference(f->cell_samples);
+        auto hbytes = mod.DemodulateHeader(f->cell_samples, ref, hdr_codec.coded_size());
+        if (!hbytes.ok()) { ++header_fail; continue; }
+        std::vector<std::uint8_t> hbuf = hbytes.value();
+        auto h = hdr_codec.Decode(hbuf);
+        if (!h.ok()) { ++header_fail; continue; }
+        ++header_ok;
     }
 
     const auto& d = src.pipeline().diagnostics();
@@ -145,6 +173,22 @@ int main(int argc, char** argv) {
                                        : 0.0;
     std::printf("cell erasure rate        %.4f\n", erasure);
 
+    const std::uint64_t header_attempts = header_ok + header_fail;
+    std::printf("\n--- header (the gate between seeing and reading) ---\n");
+    std::printf("header attempts          %llu\n",
+                static_cast<unsigned long long>(header_attempts));
+    std::printf("header success H         %.4f  (%llu ok, %llu failed)\n",
+                header_attempts ? static_cast<double>(header_ok) /
+                                      static_cast<double>(header_attempts)
+                                : 0.0,
+                static_cast<unsigned long long>(header_ok),
+                static_cast<unsigned long long>(header_fail));
+    if (header_ok == 0 && header_attempts > 0) {
+        std::printf("  Not one header decoded. The screen is being FOUND but not READ, so no\n");
+        std::printf("  payload is recoverable at this erasure rate whatever the fountain layer\n");
+        std::printf("  does -- the header is RS-protected and replicated, and it still failed.\n");
+    }
+
     // Photometric detail, printed whenever anything reached the photometry stage. A high erasure
     // rate has two entirely different causes and they need opposite fixes, so the rate alone is not
     // actionable -- which is where the first real capture stalled.
@@ -161,6 +205,10 @@ int main(int argc, char** argv) {
                     d.mean_separation() * cfg.photometric.max_pilot_residual_ratio);
         std::printf("bright nonuniformity     %.2f  (1.0 = flat; RISK-025 predicts >1)\n",
                     d.mean_bright_nonuniformity());
+        // Per-node, because the means above can look healthy while half the cells erase: erasure is
+        // decided node by node and the failures cluster spatially.
+        std::printf("nodes below separation   %.4f of lattice\n", d.fraction_low_separation());
+        std::printf("nodes over residual      %.4f of lattice\n", d.fraction_high_residual());
         if (erasure > 0.5) {
             std::printf("\n  READING THIS: a high erasure rate is two different problems.\n");
             if (d.mean_separation() < cfg.photometric.min_separation * 2.0) {

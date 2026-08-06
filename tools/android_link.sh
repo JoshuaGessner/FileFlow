@@ -27,6 +27,12 @@ RX_MAXW="${7:-2688}"
 DISTANCE_CM="${8:--1}"
 ANGLE_DEG="${9:--1}"
 NOTES="${10:-two-device link test}"
+# 0 = derive from the frame period. Set explicitly to sweep exposure (EXP-004).
+EXPOSURE_NS="${11:-0}"
+# Gate recording on the aim analyser reporting Ready. Off by default so a scripted run records
+# whatever is in front of it and the report says what that was -- but available, because a run that
+# refuses to record a hopeless frame beats one that produces 60 undecodable ones.
+AIM="${12:-false}"
 NOTES="${NOTES//\'/}"
 
 NSYM=32
@@ -90,7 +96,8 @@ rx shell "am start -n dev.fileflow/.CaptureActivity \
     --ed distanceCm $DISTANCE_CM --ed angleDeg $ANGLE_DEG \
     --es motion 'rigid/propped' \
     --el payloadBytes $PAYLOAD \
-    --ez aim false --es notes '$NOTES'" >/dev/null 2>&1
+    --el exposureNs $EXPOSURE_NS --ez aim $AIM \
+    --es notes '$NOTES'" >/dev/null 2>&1
 
 for _ in $(seq 1 90); do
     sleep 2

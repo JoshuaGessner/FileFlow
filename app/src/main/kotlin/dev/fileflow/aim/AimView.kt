@@ -7,17 +7,20 @@ import android.graphics.Paint
 import android.view.View
 
 /**
- * Draws the aiming analysis: the camera frame, the detected screen inside it, and what to change.
+ * Draws the aiming analysis as a transparent overlay ON TOP of the live camera preview.
  *
- * ## Why a schematic and not a camera preview
+ * ## Analysis over image, not instead of it
  *
- * It draws the *analysis*, not the image. That is deliberate:
+ * This draws the *analysis*: the detected screen's outline, which edges are clipping, and what to
+ * change. It is worth drawing because the facts that decide success are ones a live image hides —
+ * six consecutive hardware failures were framing or exposure, and an overexposed screen simply looks
+ * like a bright screen to the eye (F33, F34).
  *
- *  - It shows the fact that decides success. Six consecutive hardware failures were all framing or
- *    exposure, and each is obvious here and easy to miss in a live image (F33, F34).
- *  - No per-frame YUV-to-RGB conversion of a multi-megapixel frame, so the budget goes on analysis.
- *  - It cannot mislead by looking plausible. A preview of a badly overexposed screen just looks like a
- *    bright screen; this says the dark cells are washing out.
+ * But it was originally the ONLY thing drawn, on the reasoning that the schematic showed everything
+ * that mattered. That was wrong in a way that only an operator could notice: **you cannot line a
+ * camera up through a diagram of what it can see.** The preview now sits behind this overlay as a
+ * second target on the same capture session, so the compositor does the colour conversion for free
+ * and none of the analysis budget is spent on it (F37).
  *
  * Shared by the standalone aiming screen and the capture flow, so a user gets the same picture
  * whichever way they arrive at it.
@@ -87,7 +90,10 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     }
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(Color.parseColor("#101418"))
+        // A translucent scrim, not an opaque fill. The live preview is drawn by a SurfaceView
+        // BEHIND this view, and an opaque background would hide the very thing the operator needs to
+        // aim with (F37). Dark enough that white text stays legible over a bright screen.
+        canvas.drawColor(Color.parseColor("#66101418"))
         val a = aim
         if (a == null) {
             canvas.drawText(message ?: "", 40f, height / 2f, bigText)

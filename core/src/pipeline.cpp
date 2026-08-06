@@ -62,6 +62,10 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
     diag_.sum_separation += pf.mean_separation();
     diag_.sum_residual += pf.mean_residual();
     diag_.sum_bright_nonuniformity += pf.bright_nonuniformity();
+    diag_.lattice_nodes += pf.node_count();
+    diag_.nodes_low_separation += pf.nodes_below_separation(cfg_.photometric.min_separation);
+    diag_.nodes_high_residual +=
+        pf.nodes_above_residual(cfg_.photometric.max_pilot_residual_ratio);
 
     out.cell_samples = pf.Normalise(raw);
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here

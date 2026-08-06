@@ -62,6 +62,11 @@ struct PipelineDiagnostics {
     double sum_separation = 0.0;
     double sum_residual = 0.0;
     double sum_bright_nonuniformity = 0.0;
+    // Node-level failure counts, so a frame that erases half its cells while looking healthy on
+    // average is attributable rather than mysterious.
+    std::uint64_t lattice_nodes = 0;
+    std::uint64_t nodes_low_separation = 0;
+    std::uint64_t nodes_high_residual = 0;
 
     [[nodiscard]] double mean_bright_pilots() const noexcept {
         return photometric_frames ? sum_bright_pilots / static_cast<double>(photometric_frames) : 0.0;
@@ -74,6 +79,16 @@ struct PipelineDiagnostics {
     }
     [[nodiscard]] double mean_residual() const noexcept {
         return photometric_frames ? sum_residual / static_cast<double>(photometric_frames) : 0.0;
+    }
+    [[nodiscard]] double fraction_low_separation() const noexcept {
+        return lattice_nodes ? static_cast<double>(nodes_low_separation) /
+                                   static_cast<double>(lattice_nodes)
+                             : 0.0;
+    }
+    [[nodiscard]] double fraction_high_residual() const noexcept {
+        return lattice_nodes ? static_cast<double>(nodes_high_residual) /
+                                   static_cast<double>(lattice_nodes)
+                             : 0.0;
     }
     [[nodiscard]] double mean_bright_nonuniformity() const noexcept {
         return photometric_frames

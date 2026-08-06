@@ -1639,6 +1639,87 @@ a guess, and it did so here.
 
 ---
 
+## F36 — First real data read off a screen: `H` = 0.3784, and the erasure is a GEOMETRY problem `[FACT]`
+
+**Measured:** 2026-08-06, Galaxy S26 Ultra → Pixel 8, 120×260 grid at 9×9 px, 15 states/s,
+2688×1512 capture, ~19.8 cm, exposure 15.0 ms at ISO 60.
+
+**14 optical frame headers decoded from real optics.** This is the first time this project has read
+any data off a phone screen through a camera.
+
+The number is not soft. A header decode requires the Reed–Solomon layer to correct it *and* its
+CRC-32 to validate (F2). Fourteen successes therefore means fourteen frames of genuinely correct
+bytes — not a plausible-looking figure that might be noise.
+
+| | |
+|---|--:|
+| frames in | 60 |
+| frames localised | 37 |
+| **header success `H`** | **0.3784** (14 ok, 23 failed) |
+| cell erasure rate | 0.5456 |
+
+`H` appears directly in the goodput model and had never been measured on real hardware. It is now
+measured, on one rig, at one geometry: **0.3784**. The model's scenarios assume far higher.
+
+### What the erasure attribution says, and it is not what it looked like
+
+The erasure rate of 0.5456 looked like a photometric problem. The per-node telemetry says it is not:
+
+| | |
+|---|--:|
+| nodes below separation | **0.0163** |
+| nodes over residual | **0.2619** |
+| mean local separation | 142.0 (erase below 12.0) |
+| bright nonuniformity | 1.34 |
+
+Only 1.6% of lattice nodes have collapsed levels — separation is *healthy*, at 142 against a
+threshold of 12. But **26% of nodes fail the pilot-fit residual test**, and since a failing node
+erases its whole region, that is enough to erase over half the payload.
+
+**The pilot-fit residual is a "my model does not fit here" signal (F8), and the reason it does not
+fit is one layer upstream.** Two numbers in the same report point at geometry:
+
+- **`refined frames 0`, `full acquisitions 60`.** The tracker never once refined an existing lock —
+  every frame paid a fresh full acquisition. So there is no temporal consistency in the homography
+  at all.
+- **23 of 60 frames failed geometry outright.** Localisation is marginal, not solid.
+
+A homography that is slightly wrong samples each pilot slightly off its cell centre, picking up a
+blend of its neighbours. The pilot then disagrees with the level the field fitted for it, the
+residual rises, and the region is erased — correctly, because decoding against a
+confidently-wrong reference is exactly what F8 exists to prevent. **The erasures are the receiver
+protecting itself from a geometry problem, not a photometry problem.**
+
+That reframes the next work. Chasing exposure, brightness or pilot density would have been the
+obvious response to a 0.55 erasure rate and would have been aimed at the wrong layer. F10 measured
+worst-case cell-centre error **< 0.25 cells** — in simulation, against a mathematically perfect
+rectangle. On real optics, with rounded corners biasing the quad extremes inward by an asymmetric
+20–77 px (F34), that accuracy is clearly not being achieved.
+
+### No payload yet, and why
+
+Fourteen readable headers do not make a transfer. At a 0.5456 cell erasure rate the intra-frame FEC
+is far outside its budget — `nsym = 32` over 255-byte codewords corrects roughly 12% of bytes as
+erasures, and one unreadable cell condemns its whole byte (F18's recorded limitation). So the
+payload is unrecoverable at this erasure rate no matter what the fountain layer does, and **no
+goodput figure exists.**
+
+### What this took, recorded because the count is the point
+
+Six distinct causes stood between "the app runs" and "14 headers decoded", and **none of them was
+visible in the decode log**, which said only `geometry failures: N of N` every time: camera blocked
+from background; focus at infinity against a 16 cm target; ISO 400 overexposing an OLED; a capture
+mode chosen by pixel area picking a square sensor mode; rotation inflating the bounding box; and
+rounded corners eating a marker (F32–F35). Then a seventh — exposure derived from `fps`, quartering
+it to 4.16 ms and driving separation *negative* — which the new photometric telemetry caught
+immediately and by name.
+
+**Every one was found by measuring the pixels rather than reading the log.** The telemetry added
+along the way is why this last one took minutes instead of a day, and why the erasure is now
+attributed to geometry rather than guessed at.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

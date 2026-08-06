@@ -235,6 +235,26 @@ double PhotometricField::mean_separation() const noexcept {
     return s / static_cast<double>(bright_.size());
 }
 
+std::size_t PhotometricField::nodes_below_separation(double min_sep) const noexcept {
+    if (bright_.size() != dark_.size()) return 0;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < bright_.size(); ++i) {
+        if (bright_[i] - dark_[i] < min_sep) ++n;
+    }
+    return n;
+}
+
+std::size_t PhotometricField::nodes_above_residual(double ratio) const noexcept {
+    if (residual_.size() != bright_.size() || residual_.size() != dark_.size()) return 0;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < residual_.size(); ++i) {
+        // Judged against the node's OWN separation, as the erasure rule does: a residual of 20 is
+        // negligible where the levels are 200 apart and fatal where they are 30 apart.
+        if (residual_[i] > ratio * (bright_[i] - dark_[i])) ++n;
+    }
+    return n;
+}
+
 double PhotometricField::bright_nonuniformity() const noexcept {
     if (bright_.empty()) return 1.0;
     double lo = bright_[0];

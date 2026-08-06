@@ -8,7 +8,10 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.os.Bundle
 import android.util.Log
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
@@ -49,6 +52,14 @@ class AimActivity : AppCompatActivity() {
     private var view: AimView? = null
     private var worker: Thread? = null
 
+    // Held as fields because the camera cannot be opened until the preview surface exists, so setup
+    // is split across `onCreate` and the surface callback and these outlive the first of them.
+    private var gridCols = 120
+    private var gridRows = 260
+    private var captureMaxWidth = 1920
+    private var previewSurface: android.view.Surface? = null
+    private var started = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The receiver's own screen must stay awake, and camera access is refused to a background
@@ -57,22 +68,38 @@ class AimActivity : AppCompatActivity() {
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val cols = intent.getIntExtra("gridCols", 120)
-        val rows = intent.getIntExtra("gridRows", 260)
-        val maxWidth = intent.getIntExtra("maxWidth", 1920)
+        gridCols = intent.getIntExtra("gridCols", 120)
+        gridRows = intent.getIntExtra("gridRows", 260)
+        captureMaxWidth = intent.getIntExtra("maxWidth", 1920)
 
-        val v = AimView(this, cols, rows)
+        val v = AimView(this, gridCols, gridRows)
         view = v
-        setContentView(FrameLayout(this).apply { addView(v) })
+        // Live preview behind the analysis overlay. Without it the screen shows what is wrong but
+        // not where the camera is pointing, which is not something an operator can aim with (F37).
+        val preview = SurfaceView(this)
+        setContentView(FrameLayout(this).apply {
+            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        })
+        preview.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                if (!started) { started = true; startAnalysing(holder.surface) }
+            }
+            override fun surfaceChanged(h: SurfaceHolder, fmt: Int, w: Int, ht: Int) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {}
+        })
+    }
 
+    private fun startAnalysing(surface: android.view.Surface) {
+        previewSurface = surface
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
-            v.setMessage("Waiting for camera permission…")
+            view?.setMessage("Waiting for camera permission…")
             return
         }
-        start(cols, rows, maxWidth)
+        start(gridCols, gridRows, captureMaxWidth)
     }
 
     override fun onRequestPermissionsResult(
@@ -106,6 +133,7 @@ class AimActivity : AppCompatActivity() {
             var lastAnalysisMs = 0L
             var lastVerdict: AimVerdict? = null
             val outcome = rec.record(
+                previewSurface = previewSurface,
                 bundleDir = "${filesDir.absolutePath}/aim-discard",
                 frameCount = 0,                 // unbounded: runs until the activity stops it
                 targetFps = 30,

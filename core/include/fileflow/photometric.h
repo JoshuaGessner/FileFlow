@@ -100,6 +100,19 @@ class PhotometricField {
     [[nodiscard]] double mean_residual() const noexcept;
     [[nodiscard]] double mean_separation() const noexcept;
 
+    // How many lattice nodes FAIL each test, not just the average of the tests.
+    //
+    // A mean hides the thing that matters here. A frame can show healthy mean separation and a
+    // residual comfortably inside budget while half its cells still erase, because erasure is
+    // decided per node and the failures are spatially clustered -- one bad corner, a glare spot, a
+    // region where the homography has drifted. Reporting only the means says "nothing is wrong"
+    // about a frame that is losing half its payload, which is worse than saying nothing at all
+    // (measured: mean separation 142 and residual 21.6 against a 35.5 budget, with a 0.5456 erasure
+    // rate).
+    [[nodiscard]] std::size_t node_count() const noexcept { return residual_.size(); }
+    [[nodiscard]] std::size_t nodes_below_separation(double min_sep) const noexcept;
+    [[nodiscard]] std::size_t nodes_above_residual(double ratio) const noexcept;
+
   private:
     PhotometricField() = default;
 

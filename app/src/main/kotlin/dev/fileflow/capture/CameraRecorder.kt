@@ -174,6 +174,19 @@ class CameraRecorder(private val context: Context) {
          */
         focusDiopters: Float = -1f,
         /**
+         * Optional surface to also send frames to, so a human can see through the camera.
+         *
+         * Added as a SECOND target on the same session rather than by converting the Y plane
+         * ourselves: the compositor scales and colour-converts for free, while a per-frame
+         * YUV-to-RGB of a multi-megapixel image in Kotlin would compete with the analysis for the
+         * budget that makes the analysis worth having.
+         *
+         * The aiming screen originally drew only a schematic of the analysis, on the reasoning that
+         * the schematic shows the facts that decide success. It does — but it is not something you
+         * can line a camera up through, and an operator with no viewfinder is aiming blind (F37).
+         */
+        previewSurface: android.view.Surface? = null,
+        /**
          * Exposure in nanoseconds, and ISO. Both **parameters, not constants**, because the right
          * values depend entirely on what is being photographed and EXP-004/EXP-005 exist to choose
          * them.
@@ -326,6 +339,7 @@ class CameraRecorder(private val context: Context) {
 
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
+                if (previewSurface != null) addTarget(previewSurface)
                 set(
                     CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
                     android.util.Range(targetFps, targetFps),
@@ -371,8 +385,24 @@ class CameraRecorder(private val context: Context) {
                     // Exposure one quarter of the frame period: short enough to limit temporal
                     // mixing across display states (the Pc term), long enough to keep SNR usable.
                     // EXP-004 picks the real value; this is a defensible starting point, not one.
+                    // Default to nearly the whole frame period, not a quarter of it.
+                    //
+                    // A quarter was chosen to limit temporal mixing across display states, which is
+                    // a real concern at HIGH state rates -- but it costs four times the light, and
+                    // the transmitter is a small emissive panel a few centimetres away, not a
+                    // scene. At 60 fps it produced a capture with mean luminance 3.4 and 1.1% of
+                    // pixels lit, which failed geometry on 55 frames of 60; the run that worked had
+                    // used 16 ms (F36).
+                    //
+                    // The honest position is that the right exposure depends on the STATE rate,
+                    // which the receiver does not know -- a slow state rate has no mixing to avoid
+                    // and wants all the light it can get, while a fast one must cut exposure to
+                    // catch a state before it changes. Choosing light by default is the safer
+                    // failure: an overexposed frame still localises, an underexposed one does not.
+                    // EXP-004 picks the real value.
                     val exposure =
-                        if (exposureNs > 0L) exposureNs else (1_000_000_000L / targetFps) / 4
+                        if (exposureNs > 0L) exposureNs
+                        else (1_000_000_000L / targetFps) * 9 / 10
                     set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure)
                     set(CaptureRequest.SENSOR_SENSITIVITY, iso)
                     if (focusDiopters >= 0f) {
@@ -402,7 +432,7 @@ class CameraRecorder(private val context: Context) {
                 }
             }.build()
 
-            session = createSession(device, reader.surface, handler)
+            session = createSession(device, reader.surface, previewSurface, handler)
                 ?: return failure("could not configure a capture session", cameraId, size, targetFps)
 
             session.setRepeatingRequest(
@@ -549,12 +579,13 @@ class CameraRecorder(private val context: Context) {
     private fun createSession(
         device: CameraDevice,
         surface: android.view.Surface,
+        preview: android.view.Surface?,
         handler: Handler,
     ): CameraCaptureSession? {
         var session: CameraCaptureSession? = null
         val latch = CountDownLatch(1)
         device.createCaptureSession(
-            listOf(surface),
+            listOfNotNull(surface, preview),
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) { session = s; latch.countDown() }
                 override fun onConfigureFailed(s: CameraCaptureSession) {

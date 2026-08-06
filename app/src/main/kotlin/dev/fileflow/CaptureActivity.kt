@@ -5,6 +5,9 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ScrollView
@@ -86,11 +89,16 @@ class CaptureActivity : AppCompatActivity() {
      *
      * Guidance before capture is the whole point: six consecutive hardware failures were framing or
      * exposure problems (F33, F34), and a capture taken before the geometry is workable produces a
-     * dataset that cannot be decoded and cannot say why. Scripted runs pass `--ez aim false` because
-     * they are driven by a rig that is already set up.
+     * dataset that cannot be decoded and cannot say why.
+     *
+     * **Defaults ON.** It defaulted off so scripted runs would not block, and the consequence was
+     * that the safety check never ran in the path actually used: a run recorded 60 frames at 1.1%
+     * lit pixels, failed geometry on 55 of them, and nothing objected (F36). A scripted rig that is
+     * genuinely already lined up passes `--ez aim false` explicitly, which is the right way round —
+     * the assertion of readiness should be the deliberate act, not the skipping of the check.
      */
     private fun begin() {
-        if (intent.getBooleanExtra("aim", false)) startAiming() else start()
+        if (intent.getBooleanExtra("aim", true)) startAiming() else start()
     }
 
     private fun startAiming() {
@@ -99,8 +107,31 @@ class CaptureActivity : AppCompatActivity() {
         val v = AimView(this, cols, rows)
         aimView = v
         v.setBanner("Lining up — recording starts when this is steady")
-        setContentView(FrameLayout(this).apply { addView(v) })
 
+        // A real viewfinder, with the analysis drawn over it.
+        //
+        // The overlay alone could not be aimed with. It shows what is WRONG but not where the camera
+        // is POINTING, so lining two phones up meant moving them blind and waiting for the verdict to
+        // change (F37). The preview is a second target on the same capture session, so the compositor
+        // scales and colour-converts it and none of the analysis budget goes on it.
+        val preview = SurfaceView(this)
+        setContentView(FrameLayout(this).apply {
+            addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        })
+
+        // The camera cannot be configured against a surface that does not exist yet, so the aiming
+        // run starts from the surface callback rather than immediately.
+        preview.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                if (aimThread == null) runAiming(cols, rows, v, holder.surface)
+            }
+            override fun surfaceChanged(h: SurfaceHolder, fmt: Int, w: Int, ht: Int) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {}
+        })
+    }
+
+    private fun runAiming(cols: Int, rows: Int, v: AimView, previewSurface: android.view.Surface) {
         val analyser = AimAnalyser()
         val rec = CameraRecorder(this)
         aimRecorder = rec
@@ -117,6 +148,7 @@ class CaptureActivity : AppCompatActivity() {
                 notes = "aiming — not a dataset",
                 writeFrames = false,
                 rig = CameraRecorder.RigMetadata(gridCols = cols, gridRows = rows),
+                previewSurface = previewSurface,
                 onFrame = { buf, w, h, stride ->
                     val now = System.currentTimeMillis()
                     if (!handedOver && now - lastMs >= AIM_INTERVAL_MS) {
