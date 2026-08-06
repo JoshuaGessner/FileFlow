@@ -2,11 +2,12 @@
 
 > **Status:** Current
 > **Owner:** Architecture
-> **Last reviewed:** 2026-08-03
+> **Last reviewed:** 2026-08-06
 > **Related:** ADR-0006, ADR-0009, ADR-0013, OPTICAL-FRAME-CANDIDATES.md,
 > PERFORMANCE-MODEL.md, MODULATION-SPEC.md, EXPERIMENT-REGISTRY.md
 
-Findings F1–F23 from implementing the Phase 1 core. Recorded here because several are
+Findings F1–F43: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
+real hardware, and F37–F43 from putting the thing in an operator's hands. Recorded here because several are
 **design defects the specifications did not anticipate**, one is a **retraction** (F14), and
 several are model-versus-implementation gaps. Almost all were surfaced by tests or by building
 a consumer for something that already existed — not by inspection.
@@ -14,7 +15,8 @@ a consumer for something that already existed — not by inspection.
 **If you read only a few:** F14 (retracted — do not plan around a detection floor), F15
 (localisation must never depend on payload), F18 (intra-frame FEC is load-bearing), F20 (the
 code-rate ladder can be scored for free, and the answer cannot be delivered), F23 (erasures are
-not what the code spends).
+not what the code spends), F36 (first real data off a screen), F43 (four verified fixes that
+changed nothing the operator saw).
 
 ---
 
@@ -1717,6 +1719,165 @@ immediately and by name.
 **Every one was found by measuring the pixels rather than reading the log.** The telemetry added
 along the way is why this last one took minutes instead of a day, and why the erasure is now
 attributed to geometry rather than guessed at.
+
+---
+
+## F37 — A verdict is not a viewfinder `[FACT]`
+
+The aiming screen (UI-02) drew the *analysis* — where the screen sat in the frame, which edge
+was clipping — and deliberately not the camera image. The reasoning was sound on its own terms
+and is recorded in `AimActivity`: a schematic shows the thing that decides success, costs no
+YUV conversion, and cannot mislead by looking plausible.
+
+It was still unusable. It shows what is **wrong** but not where the camera is **pointing**, so
+lining two phones up meant moving them blind and waiting for a verdict to change 150 ms later.
+The operator has to close a visual feedback loop, and a loop needs a continuous signal, not a
+classification.
+
+**Fix:** a live preview *behind* the overlay, as a second target on the same capture session, so
+the compositor does the scaling and colour conversion and none of the analysis budget goes on it.
+
+**Generalisation.** "This display shows the decision-relevant quantity" is an argument about
+*information*. Aiming is a *control* task, and a controller needs an error signal it can act on
+continuously. The two are not the same requirement, and optimising a control surface for
+information content is how you build something correct and unusable.
+
+---
+
+## F38 — The overlay rotated, the image did not, and moving left moved the box up `[FACT]`
+
+The schematic was drawn in **sensor** coordinates while the operator was moving the phone in
+**display** coordinates. With a rear camera mounted at `SENSOR_ORIENTATION = 90`, moving the
+phone left moved the box up. Reported, accurately, as impossible to line up with.
+
+The overlay was fixed by rotating it into display space. The preview underneath it was not, and
+that half of the defect survived three further attempts — see F41 and F42.
+
+**Generalisation.** Any two-layer display where one layer is derived from sensor data and the
+other from the same data through a different transform has a registration bug waiting in it. The
+symptom is not "it looks wrong" — both layers look plausible alone. It is that *the control
+inputs map to the wrong axis*, which is only visible to someone holding the device.
+
+---
+
+## F39 — Lit fraction is payload-dependent and must never gate a verdict `[FACT]`
+
+The aim analyser judged brightness partly on the share of interior pixels at the bright level. On
+a fountain-coded stream that share is a property of the **payload**, not of the optics: a block
+padded with 22 zero symbols out of 64 renders mostly dark, and the analyser called a
+correctly-exposed screen too dark.
+
+This also produced a wrong diagnosis that cost real time. A dim, flickering transmitter was
+attributed to OLED PWM, and the operator was told to raise the screen brightness by hand — which
+they could not do, because the app was holding the brightness. The panel was fine. The frame was
+mostly zeros.
+
+**Fix:** judge brightness on **levels and separation** — quantities the channel determines —
+never on how many cells happen to be lit. `lit_fraction` is retained as diagnostic output and
+documented as payload-dependent in `framing.h`.
+
+**Generalisation.** A channel-quality metric must be a function of the channel. If a metric moves
+when the payload changes, it is measuring the message.
+
+---
+
+## F40 — Autofocus optimises the wrong objective, and so did my first focus metric `[FACT]`
+
+Continuous AF converged on a value that looked plausible in a photograph and gave a **level
+separation of 5.1** against a decode threshold of 12 — unreadable. AF maximises general-scene
+contrast; this channel needs the two luminance levels far apart. Those are different objectives
+and they have different optima.
+
+The first sweep built to find a better focus was **also** wrong: it scored each focus distance by
+mid-level fraction, and picked 40 cm for a subject at 20 cm. Scoring on **level separation**
+picked the right distance.
+
+Worse, an intermediate version *locked* the bad AF value, making a transient problem permanent —
+a regression introduced while fixing the thing it made worse.
+
+**Generalisation.** When overriding an adaptive system, the override needs the objective the task
+cares about, stated explicitly. Two consecutive versions here optimised proxies, and both proxies
+were defensible until measured against the quantity that decides decoding.
+
+---
+
+## F41 — Letterboxing the container did not stop the stretch `[FACT]`
+
+A landscape camera stream in a portrait view was squashed vertically. The fix was a self-sizing
+container that held the correct aspect ratio. The operator reported the same stretch.
+
+Sizing a box does not rotate what is drawn in it. A `SurfaceView` stretches whatever buffer it
+holds to fill its bounds, so a landscape buffer in a portrait-shaped box is still landscape
+content, now squashed into a differently-shaped hole.
+
+---
+
+## F42 — Pinning the buffer size did not either, and the sign was wrong `[FACT]`
+
+Second attempt: pin the surface's buffer size. Same outcome, same reason — the pixels were never
+turned. Only then did the preview move to a `TextureView`, which renders through a transform
+matrix and can therefore rotate and scale together.
+
+The transform's **sign** then cost another round: rotating by *minus* `SENSOR_ORIENTATION` leaves
+the image lying on its side. `SENSOR_ORIENTATION` is how far the sensor is mounted clockwise, so
+rotating by *plus* that much undoes it.
+
+**Three wrong fixes in a row, each verified by reasoning and none by measurement**, against an
+operator who reported the same symptom every time and was right every time.
+
+---
+
+## F43 — Two implementations of the preview, and the fixes all landed on the one nobody used `[FACT]`
+
+**Severity: high — it invalidated four consecutive "verified" claims.**
+
+After F42, the preview was correct. The operator still reported a stretched image.
+
+`AimActivity` and `CaptureActivity` each had their **own** preview. Every fix, and every
+verification, went to `AimActivity`, because that is what `adb shell am start` launches. The
+**Receive** button opens `CaptureActivity`, which still used the `SurfaceView`-in-a-sizing-box
+arrangement that F41 had already established cannot work. The operator was looking at the
+untouched copy the entire time.
+
+The operator's own report is what separated them, and it named both defects precisely:
+
+> "every time you launch the app on the pixel it is sideways but if I launch it fresh and click
+> receive its upright, just stretched up and down still"
+
+Two launch routes, two different screens, two different symptoms — in one sentence.
+
+**Fix:** `CaptureActivity` uses `CameraPreviewView`; `AspectFrameLayout` is **deleted** rather
+than left where it could be reached for again. The device-rotation term and the tap-to-rotate
+override went too: every activity is `screenOrientation="portrait"`, so the term is zero by
+construction, and `AimView` rotates its overlay by `sensorRotation` alone — any term present in
+one and absent in the other slides the guidance off the image it annotates.
+
+**Two methodological failures, both mine, and the second is the worse one:**
+
+1. **I verified on the path I could script, not the path the operator uses.** `am start` with
+   explicit extras was convenient; the Receive button sends different extras (`maxWidth` 2688,
+   not 1920) *and* opens a different activity. A test that does not traverse the user's entry
+   point is not a test of the user's experience. The verification run now drives the actual
+   button via `uiautomator` and a tap.
+2. **My screenshot check was measuring the overlay, not the camera image.** It took the bounding
+   box of every bright pixel, so the schematic's thin lines and text set the extremes: it
+   returned an *identical* `986x1830` box for two runs whose scenes were entirely different —
+   one of which had the transmitter dark. It reported UPRIGHT both times and would have reported
+   UPRIGHT for a sideways image. Replaced with a largest-connected-component measurement, which
+   isolates the filled blob of the transmitting screen from thin UI strokes.
+
+A check that cannot fail is not evidence. Both of these returned green while the operator was
+looking at a broken screen, which is the specific way a verification habit can be worse than no
+verification at all — it converts "I have not checked" into "I have confirmed".
+
+**Verified after the fix**, through the Receive button, transmitter live:
+`camera 2688x1512, sensor 90 -> rotate 90, uniform scale 0.714, view 1080x2400`, and the
+largest bright blob measures taller than wide. Uniform scale is the load-bearing part: one factor
+on both axes cannot stretch.
+
+**Generalisation.** When a user reports a defect that measurement says is fixed, the first
+hypothesis should be that the measurement and the user are looking at different things — not
+that the user is mistaken. Four rounds were spent on the second hypothesis.
 
 ---
 

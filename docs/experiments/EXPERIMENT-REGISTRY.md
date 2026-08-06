@@ -1,9 +1,10 @@
 # Experiment registry
 
-> **Status:** Draft — **EXP-023 run** (2026-08-03); EXP-001 has a simulator dry run whose
-> conclusion is that it *cannot* be answered in simulation (F16). All others unrun.
+> **Status:** Draft — **EXP-023 run** (2026-08-03); **EXP-001 has its first two hardware
+> points** (2026-08-06) after a simulator dry run established it *cannot* be answered in
+> simulation (F16); EXP-007 partially run. All others unrun.
 > **Owner:** Research / engineering
-> **Last reviewed:** 2026-08-03
+> **Last reviewed:** 2026-08-06
 > **Related:** OPEN-QUESTIONS.md, FIRST-THREE-EXPERIMENTS.md, BENCHMARK-METHODOLOGY.md
 
 Every major uncertainty is an experiment. Entries are created **before** the run, with the
@@ -50,7 +51,36 @@ estimated goodput, and locate the cliff within one sweep step.
 > An earlier claim of a ~6 px/cell detection floor (F14) has been **retracted** — it was an
 > artifact of the F15 bug, and the corrected boundary turned out to be the `min_area_fraction`
 > config threshold rather than optics. Do not plan grid geometry around it.
-**Conclusion.** — · **Confidence.** — · **Follow-up.** Feeds EXP-013 and the grid decision (OQ-003).
+> **FIRST HARDWARE OBSERVATION 2026-08-06 — the cliff exists, and it is between 5.93 and 7.30
+> px/cell on this pair.** Two captures, Galaxy S26 Ultra → Pixel 8, grid 120×260, M0, exposure
+> 15 ms. Raw: `data/experiments/EXP-001/raw/below-cliff-5.93pxcell-20260806.txt`.
+>
+> | px/cell | local separation | headers decoded |
+> |--------:|-----------------:|----------------:|
+> | 7.30    | 142.0            | **14**          |
+> | 5.93    | 4.5              | 0               |
+>
+> **The diagnostic detail is that GLOBAL separation was essentially unchanged** (~211 vs ~225)
+> across both captures. Only the **local** separation, measured against the pilot lattice,
+> collapsed. A whole-frame brightness metric says these two captures are equally good; the link
+> works in one and not at all in the other. Any future exposure or brightness metric that is
+> computed globally will be blind to exactly this failure.
+>
+> This is the mechanism F16 predicted the simulator could never produce — `tools/grid_sweep.sh`
+> swept to 5.00 px/cell with goodput rising monotonically and no cliff anywhere. It took real
+> optics to find, which retires the open question of whether F16's null result was a modelling
+> artifact: it was.
+>
+> **This is two points, not a sweep.** It brackets the cliff; it does not locate it, and the
+> success threshold above asks for it to be located within one sweep step. Distance and angle are
+> unswept, and n = 1 per point. Treat 7.5 px/cell as a working floor with one observation behind
+> it, not as a characterised limit.
+
+**Conclusion.** Bracketed, not located: the cliff lies between 5.93 and 7.30 px/cell for this
+device pair at this distance. · **Confidence.** Low — two captures, one pair, one distance, no
+repeats. The *existence* of a sharp transition is High; its position is not.
+· **Follow-up.** A real sweep over distance to locate it; feeds EXP-013 and the grid decision
+(OQ-003).
 **Note.** ChromaCode's measured non-monotonic cell-size response `[LIT]` is the reason this
 sweeps finely rather than testing three points.
 
