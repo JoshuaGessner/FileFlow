@@ -5,6 +5,19 @@
 > **Last reviewed:** 2026-08-02
 > **Related:** ADR-0010, C16, RISK-024, EXP-010, EXP-011, EXP-012
 
+> ### ⚠ Missing impairment: corner occlusion (F34)
+>
+> The renderer draws a mathematically perfect rectangle, so it **cannot** reproduce the failure that
+> blocked the project's first real decode: a phone's rounded display corners physically cut away the
+> corners of a full-bleed optical frame — measured at 20–77 camera pixels, over ten cells — which
+> breaks both the corner-extreme search and marker verification while every other property of the
+> capture looks healthy.
+>
+> This is the third impairment whose *absence* produced a confident wrong conclusion (F14's
+> retraction, F16's missing density cliff, F34). **SIM-03 calibration should not claim the model
+> matches reality until the model can express this failure**, because otherwise it fits a model
+> structurally incapable of the thing being calibrated against.
+
 ## Purpose
 
 Generate optical frame sequences, apply controlled channel impairments, and feed the

@@ -1523,6 +1523,122 @@ then have to earn back.**
 
 ---
 
+## F34 — The screen's rounded corners clip a full-bleed frame, and localisation depends on corners `[FACT]`
+
+**Found:** 2026-08-05. **This is the finding that produced the project's first real screen detection.**
+
+After F33 cleared every rig problem, a capture had all of this true at once — and still failed
+60 frames out of 60:
+
+| Property | Measured | Verdict |
+|---|--:|:--|
+| Whole screen inside the frame | bbox at (449,356) in 2688×1512 | not clipped |
+| Cell pitch | 7.30 px/cell | comfortable |
+| In-image rotation | 1.0° | aligned |
+| Interior levels | dark 0.339 / bright 0.539 / **mid 0.122** | *"cells ARE being resolved optically"* |
+| Focus | AF converged, 15.8 cm | correct for the rig |
+| Exposure | 16 ms at ISO 60 | balanced |
+
+Every measurable property was healthy. The decode still reported `geometry failures 60`.
+
+### The cause
+
+**A phone's display has generously rounded corners, so a full-bleed optical frame has its four
+corners physically cut away by the glass.** Measured on the capture with `tools/frame_corners.py`,
+walking each bounding-box corner inward along its diagonal to the first lit pixel:
+
+| Corner | Inset |
+|---|--:|
+| top-left | **77 px** |
+| top-right | 23 px |
+| bottom-left | 40 px |
+| bottom-right | 20 px |
+
+At 7.3 px/cell, **77 px is more than ten cells** — so the entire top-left corner marker was outside
+the emitting area. And the insets are *asymmetric*, because perspective and rotation add to the
+rounding.
+
+That breaks localisation twice over. The quad is found from the streaming extremes of `x+y` and
+`x−y` (F12's O(1) accumulator), and on a rounded rectangle those extremes lie somewhere on the arcs
+rather than at the true corners — biased inward by a different amount at each corner, which skews
+the homography. Then marker verification, which samples *through* that homography and demands both
+an absolute score and a margin over the runner-up (F9), cannot pass because one marker is not
+being displayed at all.
+
+### The fix, which removes a second failure mode as a side effect
+
+The renderer now computes the **largest integer cell pitch that fits inside a margin** and centres
+the result, instead of stretching the grid across the whole surface.
+
+**Measured result: `frames decoded 48 of 60`, geometry failures 12.** From zero. Reproduced on a
+second run at 48/60.
+
+The side effect is worth as much as the fix. Full-bleed rendering required the surface to be an
+exact multiple of the grid, and when it was not — a 1080×2340 surface with the 144×240 charter grid
+— the pitch came out at 7.5 × 9.75 px with every cell boundary on a fractional pixel (F31).
+Choosing the pitch and letterboxing makes it integer for **any** grid and surface pair, so that
+class of misconfiguration is now unrepresentable rather than merely warned about.
+
+### Why the simulator could never have found this
+
+`sim/render.cpp` draws a mathematically perfect rectangle. There are no rounded corners to clip,
+so **this defect cannot occur in simulation at any setting**. It is the third instance of the same
+pattern: a renderer that omits a physical mechanism reports the absence of the failure that
+mechanism causes (F14's retraction, F16's missing density cliff, and now this).
+
+Two consequences beyond the immediate fix:
+
+- **The simulator's impairment set should grow a corner-occlusion arm** before SIM-03 calibration
+  claims the model matches reality. Without it, calibration would be fitting a model that is
+  structurally incapable of the failure.
+- **A margin is not free.** It costs cells, and therefore payload per frame. How much margin is
+  actually required is a function of the panel's corner radius, which is device-specific and not
+  exposed by any API we have found — so it currently has to be measured per device or set
+  conservatively. Raised as OQ-039.
+
+---
+
+## F35 — The tooling was built for the developer, not the operator `[FACT]`
+
+**Found:** 2026-08-05, from operator feedback rather than from a test.
+
+During the two-device runs the receiving phone showed, in the operator's words, *"a white screen
+with text"* — no help lining up the camera. That was `CaptureActivity`'s report: 11sp monospace on
+the default light theme, working exactly as written. The aiming UI existed by then, but as a
+**separate activity that had to be launched by hand**, so during the runs that actually mattered
+the phone offered nothing.
+
+The deeper shape of it: every screen was reachable only through `adb shell am start`, and the
+launcher icon opened the capability probe. All the diagnostic capability built in F33 was pointed
+at the person reading a terminal, and none of it at the person holding the phone — who is the one
+who has to move it.
+
+Fixed by making the receiver **aim before it records**: live guidance, then an automatic start once
+six consecutive `Ready` verdicts land. The streak matters and is not padding — a single `Ready`
+between two bad frames is precisely what the `Ready`/`TooDark` oscillation looks like when the
+exposure window falls in the panel's blanking interval, and starting on it would record the bad
+half. Verified end to end: lined up, started itself, recorded 60 frames, decoded 48, with no `adb`
+beyond launching the activity.
+
+### A correction, recorded because the error was mine and instructive
+
+An earlier comment in this repository stated that a `CAMERA_DISABLED` failure was caused by a
+**locked screen**. The error itself was real and specific — *"cannot open camera from background",
+proc state 20* — but that only establishes the app was **not foreground**. I never verified the
+cause, and the operator reports both phones were unlocked at the time.
+
+Worse for attribution: two fixes were applied in the same change — the
+`setShowWhenLocked`/`setTurnScreenOn` flags *and* a wake/dismiss-keyguard step in the run script —
+so **which of them made it work is unknown**, and possibly neither did. The flags are kept as cheap
+insurance and the comment now says exactly that rather than asserting a diagnosis.
+
+This is the F15 pattern for the third time in this project: a plausible mechanism written down as
+fact, with the real cause unexamined because the symptom went away. The specific habit worth
+naming is **changing two things at once while chasing one failure** — it converts a diagnosis into
+a guess, and it did so here.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.
