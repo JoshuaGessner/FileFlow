@@ -6,7 +6,7 @@
 > **Related:** ADR-0006, ADR-0009, ADR-0013, OPTICAL-FRAME-CANDIDATES.md,
 > PERFORMANCE-MODEL.md, MODULATION-SPEC.md, EXPERIMENT-REGISTRY.md
 
-Findings F1–F43: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
+Findings F1–F44: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
 real hardware, and F37–F43 from putting the thing in an operator's hands. Recorded here because several are
 **design defects the specifications did not anticipate**, one is a **retraction** (F14), and
 several are model-versus-implementation gaps. Almost all were surfaced by tests or by building
@@ -16,7 +16,7 @@ a consumer for something that already existed — not by inspection.
 (localisation must never depend on payload), F18 (intra-frame FEC is load-bearing), F20 (the
 code-rate ladder can be scored for free, and the answer cannot be delivered), F23 (erasures are
 not what the code spends), F36 (first real data off a screen), F43 (four verified fixes that
-changed nothing the operator saw).
+changed nothing the operator saw), F44 (a component that reported a transform it did not apply).
 
 ---
 
@@ -1878,6 +1878,47 @@ on both axes cannot stretch.
 **Generalisation.** When a user reports a defect that measurement says is fixed, the first
 hypothesis should be that the measurement and the user are looking at different things — not
 that the user is mistaken. Four rounds were spent on the second hypothesis.
+
+---
+
+## F44 — The TextureView held the matrix and did not honour it `[FACT]`
+
+**The measurement that ended five rounds of guessing, and it was a contradiction, not a value.**
+
+After F43 unified the two previews, the operator still reported the image sideways and stretched
+to fill the portrait screen. So the transform was read back **out of the view** rather than logged
+on the way in:
+
+```
+CONTENT LANDS AT (0,240)-(1080,2160)  1080x1920  bars top 240 bottom 240  identity=false
+```
+
+`getTransform()` returned the correct matrix. `mapRect` put the content in the correct place, with
+240 px letterbox bars top and bottom. Meanwhile, with the overlay hidden so that nothing but the
+camera image and a black background could appear, the composited screen carried image signal in
+**both** bar regions — rows 2160–2400 at mean luminance 113 where the view's own transform demands
+zero.
+
+Both facts are solid and they cannot both describe what is on the glass. **The matrix was held and
+not composited.** The root cause was not pursued further, because it stopped mattering:
+
+**Fix: stop asking the platform to rotate anything.** The receiver already reads every frame's Y
+plane on the CPU for aim analysis, so the pixels are in hand. `LumaPreviewView` copies them into a
+`Bitmap` — subsampled by an integer stride to ~720 px on the long edge — and draws it through a
+`Canvas` matrix. There is no `SurfaceTexture`, no compositor transform hint, and no producer queue
+between the rotation and the pixels. `CameraPreviewView` and its `TextureView` are deleted.
+
+Grayscale is not a compromise here: the link is luminance-only, so the preview now shows exactly
+what the demodulator sees, which is strictly more informative than an ISP-prettified image that
+can look fine while its levels are unusable.
+
+**Generalisation, and it is the expensive lesson of this whole sequence.** Logging a value you
+computed proves only that your arithmetic ran. Five rounds of "verified" rested on exactly that,
+and every one of them was contradicted by the operator. The moment the *same quantity* was read
+back out of the component that owned it and compared against an independent observation of the
+result, the defect was located in one attempt. **Verify by reading back from the system under
+test, never by echoing your own input** — and when a component's self-report and the observable
+result disagree, stop debugging the value and replace the dependency.
 
 ---
 

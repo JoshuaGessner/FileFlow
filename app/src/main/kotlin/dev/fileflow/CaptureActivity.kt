@@ -15,7 +15,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
-import dev.fileflow.aim.CameraPreviewView
+import dev.fileflow.aim.LumaPreviewView
 import dev.fileflow.capture.CameraRecorder
 import java.io.File
 
@@ -41,7 +41,7 @@ class CaptureActivity : AppCompatActivity() {
 
     private lateinit var text: TextView
     private var aimView: AimView? = null
-    private var previewView: CameraPreviewView? = null
+    private var previewView: LumaPreviewView? = null
     /** Focus the aim phase settled on; carried into the recording so it stops hunting. */
     private var lockedFocus: Float = -1f
     private var aimRecorder: CameraRecorder? = null
@@ -126,22 +126,23 @@ class CaptureActivity : AppCompatActivity() {
         // preview" landed on the standalone screen while the reported stretch was here, in the path
         // nobody was testing. Two implementations of one thing meant a fix could look verified and
         // change nothing the operator saw, so there is now exactly one (F43).
-        val preview = CameraPreviewView(this)
+        val preview = LumaPreviewView(this)
         previewView = preview
+        // `--ez overlay false` hides the schematic, so a screenshot shows the preview alone. See
+        // the note in AimActivity: automated checks with the overlay present measured the overlay.
+        val showOverlay = intent.getBooleanExtra("overlay", true)
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            if (showOverlay) addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
 
-        // The camera cannot be configured against a surface that does not exist yet, so the aiming
-        // run starts from the surface callback rather than immediately.
-        preview.onSurfaceReady = { surface ->
-            if (aimThread == null) runAiming(cols, rows, v, surface)
-        }
+        // No surface to wait for: the preview is painted from the frames the analyser already
+        // reads, so aiming starts straight away.
+        if (aimThread == null) runAiming(cols, rows, v)
     }
 
-    private fun runAiming(cols: Int, rows: Int, v: AimView, previewSurface: android.view.Surface) {
+    private fun runAiming(cols: Int, rows: Int, v: AimView) {
         val analyser = AimAnalyser()
         val rec = CameraRecorder(this)
         aimRecorder = rec
@@ -158,21 +159,17 @@ class CaptureActivity : AppCompatActivity() {
                 notes = "aiming — not a dataset",
                 writeFrames = false,
                 rig = CameraRecorder.RigMetadata(gridCols = cols, gridRows = rows),
-                previewSurface = previewSurface,
                 onFrame = { buf, w, h, stride ->
                     // The schematic has to be drawn in DISPLAY space, and the rotation that puts it
                     // there is known only once the camera is open (F38).
                     if (v.sensorRotation != rec.sensorOrientation) {
                         v.sensorRotation = rec.sensorOrientation
                     }
-                    // Frame dimensions arrive with the frames, so the preview's geometry is
-                    // set here. The overlay is then told the rectangle the image actually occupies,
-                    // so the guidance boxes land ON the image rather than beside it.
+                    // Paint the preview from this frame, then register the overlay to the
+                    // rectangle the image actually occupies.
                     previewView?.let { pv ->
-                        runOnUiThread {
-                            pv.setCameraGeometry(w, h, rec.sensorOrientation)
-                            v.contentRect = pv.contentRect()
-                        }
+                        pv.submit(buf, w, h, stride, rec.sensorOrientation)
+                        runOnUiThread { v.contentRect = pv.contentRect() }
                     }
                     val now = System.currentTimeMillis()
                     if (!handedOver && now - lastMs >= AIM_INTERVAL_MS) {

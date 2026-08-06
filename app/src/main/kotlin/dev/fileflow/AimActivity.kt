@@ -20,7 +20,7 @@ import androidx.core.content.ContextCompat
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
-import dev.fileflow.aim.CameraPreviewView
+import dev.fileflow.aim.LumaPreviewView
 import dev.fileflow.capture.CameraRecorder
 
 /**
@@ -59,8 +59,7 @@ class AimActivity : AppCompatActivity() {
     private var gridCols = 120
     private var gridRows = 260
     private var captureMaxWidth = 1920
-    private var previewSurface: android.view.Surface? = null
-    private var previewView: CameraPreviewView? = null
+    private var previewView: LumaPreviewView? = null
     private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,7 +78,7 @@ class AimActivity : AppCompatActivity() {
         view = v
         // Live preview behind the analysis overlay. Without it the screen shows what is wrong but
         // not where the camera is pointing, which is not something an operator can aim with (F37).
-        val preview = CameraPreviewView(this)
+        val preview = LumaPreviewView(this)
         // The preview is LETTERBOXED, not stretched.
         //
         // A rear camera delivers landscape frames and the phone is held portrait, so filling the
@@ -95,19 +94,24 @@ class AimActivity : AppCompatActivity() {
         // turn the pixels, so a landscape sensor stream stayed squashed inside a portrait box no
         // matter what shape the box was -- which is why the operator reported the same stretch after
         // two separate "fixes" (F42).
+        // `--ez overlay false` hides the schematic so a screenshot contains the preview and
+        // nothing else. Diagnostic only: with the overlay drawn, every automated check of the
+        // image was really measuring the overlay's own strokes, and reported a pass for a scene
+        // with the transmitter switched off (F43).
+        val showOverlay = intent.getBooleanExtra("overlay", true)
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            if (showOverlay) addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
-        preview.onSurfaceReady = { surface ->
-            if (!started) { started = true; startAnalysing(surface) }
-        }
         previewView = preview
+
+        // No surface to wait for any more. The preview is painted from the frames the analyser
+        // already reads, so the camera can open as soon as permission allows.
+        if (!started) { started = true; startAnalysing() }
     }
 
-    private fun startAnalysing(surface: android.view.Surface) {
-        previewSurface = surface
+    private fun startAnalysing() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -159,7 +163,6 @@ class AimActivity : AppCompatActivity() {
             val focusOverride = intent.getFloatExtra("focusDiopters", -1f)
             val outcome = rec.record(
                 focusDiopters = focusOverride,
-                previewSurface = previewSurface,
                 bundleDir = "${filesDir.absolutePath}/aim-discard",
                 frameCount = 0,                 // unbounded: runs until the activity stops it
                 targetFps = 30,
@@ -173,15 +176,12 @@ class AimActivity : AppCompatActivity() {
                     view?.let { if (it.sensorRotation != rec.sensorOrientation) {
                         it.sensorRotation = rec.sensorOrientation
                     } }
-                    // Frame dimensions are known only once frames arrive, so the preview's shape is
-                    // corrected here rather than guessed at layout time.
+                    // Draw the preview from this very frame. Feeding it the same buffer the
+                    // analyser reads means the picture and the verdict can never describe
+                    // different moments.
                     previewView?.let { pv ->
-                        runOnUiThread {
-                            // Rotation AND proportions, in one place: a SurfaceView could do neither
-                            // (F42).
-                            pv.setCameraGeometry(w, h, rec.sensorOrientation)
-                            view?.contentRect = pv.contentRect()
-                        }
+                        pv.submit(buf, w, h, stride, rec.sensorOrientation)
+                        runOnUiThread { view?.contentRect = pv.contentRect() }
                     }
                     val now = System.currentTimeMillis()
                     if (now - lastAnalysisMs >= ANALYSE_INTERVAL_MS) {
