@@ -1,6 +1,8 @@
 package dev.fileflow.aim
 
 import android.content.Context
+import android.util.Log
+import android.view.SurfaceView
 import android.widget.FrameLayout
 
 /**
@@ -42,6 +44,18 @@ class AspectFrameLayout(context: Context) : FrameLayout(context) {
         val a = w.toFloat() / h.toFloat()
         if (kotlin.math.abs(a - aspect) > 1e-4f) {
             aspect = a
+            Log.i(TAG, "aspect := %.4f from camera %dx%d rot %d (display %dx%d)"
+                .format(a, frameW, frameH, sensorRotation, w, h))
+            // Pin the child surface's BUFFER to the camera's display-oriented geometry.
+            //
+            // Sizing this container correctly is not sufficient on its own: a `SurfaceView` scales
+            // whatever buffer it holds to fill its bounds, and the buffer was created at the view's
+            // original (full-portrait) size before any frame had arrived to reveal the camera's
+            // aspect. Fixing the buffer makes the two agree, so the stream is letterboxed rather
+            // than stretched even on the first layout pass.
+            for (i in 0 until childCount) {
+                (getChildAt(i) as? SurfaceView)?.holder?.setFixedSize(w, h)
+            }
             requestLayout()
         }
     }
@@ -71,5 +85,9 @@ class AspectFrameLayout(context: Context) : FrameLayout(context) {
             MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY),
         )
+    }
+
+    companion object {
+        private const val TAG = "FileFlow.Aim"
     }
 }

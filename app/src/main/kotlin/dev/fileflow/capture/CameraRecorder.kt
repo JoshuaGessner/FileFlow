@@ -582,7 +582,23 @@ class CameraRecorder(private val context: Context) {
             val b = margin * minOf(s.height.toDouble(), s.width / r)
             return maxOf(a, b) / rows
         }
-        return candidates.maxByOrNull { score(it) }
+
+        // Ties are common and must be broken deliberately.
+        //
+        // Whenever the same axis is limiting, modes of very different shape score IDENTICALLY:
+        // 1920x1080 and 1920x1920 both yield 6.28 px/cell for this grid, because the screen's long
+        // axis is bounded by the 1920 either way. `maxByOrNull` then returns whichever came first in
+        // the driver's list, and it returned the SQUARE one -- which wastes 78% more bandwidth for no
+        // extra resolvable density, and shows the operator a square viewport that looks nothing like
+        // the phone they are aiming (F38, F41).
+        //
+        // So among equal-scoring modes, take the smallest area. That is not a cosmetic preference:
+        // write throughput is the harness's binding constraint (F28), and the discarded pixels
+        // contribute nothing to px/cell by construction.
+        val best = candidates.maxOfOrNull { score(it) } ?: return null
+        return candidates
+            .filter { score(it) >= best - 1e-6 }
+            .minByOrNull { it.width.toLong() * it.height }
     }
 
     private fun openCamera(mgr: CameraManager, id: String, handler: Handler): CameraDevice? {
