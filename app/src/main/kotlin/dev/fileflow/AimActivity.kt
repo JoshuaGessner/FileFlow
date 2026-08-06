@@ -100,6 +100,15 @@ class AimActivity : AppCompatActivity() {
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(v, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
+        // Tap anywhere to cycle the preview's rotation. See CameraPreviewView.rotationOffset for
+        // why this exists rather than a value I was confident in.
+        v.setOnClickListener {
+            val total = preview.bumpRotation()
+            v.setBanner("Preview rotation $total° — tap to change")
+            view?.contentRect = preview.contentRect()
+        }
+        v.isClickable = true
+
         preview.onSurfaceReady = { surface ->
             if (!started) { started = true; startAnalysing(surface) }
         }

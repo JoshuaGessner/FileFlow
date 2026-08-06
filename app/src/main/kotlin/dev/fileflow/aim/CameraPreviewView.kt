@@ -41,6 +41,28 @@ class CameraPreviewView(context: Context) : TextureView(context) {
     /** Called once the underlying texture exists and a camera can be pointed at it. */
     var onSurfaceReady: ((Surface) -> Unit)? = null
 
+    /**
+     * Extra quarter-turns applied on top of the computed rotation, cycled by tapping.
+     *
+     * Present because reasoning about this failed four times running. The relationship between
+     * `SENSOR_ORIENTATION`, the display rotation and what a `TextureView` transform does to the
+     * buffer is genuinely easy to get backwards, and every wrong guess cost a round-trip to someone
+     * holding two phones. Letting the operator cycle it settles the question in one, and the value
+     * they land on is logged so it can become the default.
+     */
+    var rotationOffset: Int = 0
+        set(v) {
+            field = ((v % 360) + 360) % 360
+            Log.i(TAG, "rotation offset now $field (total ${displayRotationDeg()})")
+            applyTransform()
+        }
+
+    /** Cycle a quarter-turn. Returns the new TOTAL rotation being applied. */
+    fun bumpRotation(): Int {
+        rotationOffset = rotationOffset + 90
+        return displayRotationDeg()
+    }
+
     init {
         surfaceTextureListener = object : SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
@@ -110,7 +132,7 @@ class CameraPreviewView(context: Context) : TextureView(context) {
             android.view.Surface.ROTATION_270 -> 270
             else -> 0
         }
-        return ((sensorRotation - deviceDeg) + 360) % 360
+        return ((sensorRotation - deviceDeg) + rotationOffset + 360) % 360
     }
 
     private fun applyTransform() {
