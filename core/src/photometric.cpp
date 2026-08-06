@@ -8,6 +8,22 @@
 namespace fileflow {
 namespace {
 
+// Weight floor, in squared lattice units, so a pilot on top of a node cannot produce an infinite
+// weight. A quarter of a lattice step: near enough to "on the node" to dominate the fit, far enough
+// to keep the normal equations conditioned.
+constexpr double kMinDistanceSq = 0.25;
+// Below this many pilots in the window there is no plane worth fitting.
+constexpr std::size_t kMinPlanePilots = 4;
+// Collinearity guard, relative to the scale of the normal equations.
+constexpr double kMinConditioning = 1e-6;
+
+// Determinant of a 3x3 given in row-major order.
+constexpr double Det3(double a, double b, double c,
+                      double d, double e, double f,
+                      double g, double h, double i) noexcept {
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+}
+
 struct PilotObs {
     double lc = 0.0;  // lattice coordinates (fractional)
     double lr = 0.0;
@@ -73,53 +89,110 @@ Result<PhotometricField> PhotometricField::Estimate(const FrameLayout& layout,
 
     const double rad = static_cast<double>(cfg.search_radius);
     // Interpolates one level onto the lattice and accumulates the weighted spread of the
-    // contributing pilots about that estimate. The spread is the model-fit residual: when
-    // pilots that should agree do not, the region is damaged and its cells must be erased
-    // rather than decoded against a confidently-wrong reference.
+    // contributing pilots ABOUT A LOCAL PLANE. The spread is the model-fit residual: when pilots
+    // that should agree do not, the region is damaged and its cells must be erased rather than
+    // decoded against a confidently-wrong reference.
+    //
+    // ## Why a plane and not a weighted mean
+    //
+    // This fitted a locally CONSTANT level (plain inverse-distance weighting) and measured the
+    // residual as the spread about it. That makes the residual a function of the field's SLOPE:
+    // across a window of radius r, a gradient g produces a spread of about g*r even when every
+    // pilot is perfectly healthy and agrees exactly with its neighbours. The estimator reports
+    // "these pilots disagree" when the truth is "this region is shaded".
+    //
+    // It is not a small effect on real optics. Measured on the first above-cliff two-device
+    // capture: bright nonuniformity 3.83 across the frame, mean residual 44.5 against a budget of
+    // 16.7, and 76.7% of lattice nodes erased on residual while 0% failed on separation. Nothing
+    // was damaged; the screen was simply much brighter in the middle than at the edges, which is
+    // what an OLED panel looks like from 13.5 cm where the edges are viewed far off-axis.
+    //
+    // The pathology is that it got WORSE as the rig improved. Moving closer to clear the density
+    // cliff steepened the gradient, so the same fix that made the frame resolvable made it
+    // unreadable: headers went from 14 to 0 between the two captures (F45).
+    //
+    // A first-order fit absorbs the ramp exactly, leaving the residual to measure what it was
+    // always meant to measure -- occlusion, glare, and a sampling grid sitting off its cells.
+    // Degenerate cases (too few pilots, or collinear ones, which happens where markers and the
+    // header punch holes in the lattice) fall back to the weighted mean, which is the old
+    // behaviour and is safe.
     const auto fill = [&](const std::vector<PilotObs>& obs, std::vector<double>& field,
                           double fallback) {
         for (std::uint32_t j = 0; j < f.lat_rows_; ++j) {
             for (std::uint32_t i = 0; i < f.lat_cols_; ++i) {
-                double wsum = 0.0;
-                double vsum = 0.0;
-                bool exact = false;
+                // Weighted moments of the basis {1, dx, dy} against the observations.
+                double S = 0.0, Sx = 0.0, Sy = 0.0;
+                double Sxx = 0.0, Sxy = 0.0, Syy = 0.0;
+                double Sz = 0.0, Sxz = 0.0, Syz = 0.0;
+                double lo = 0.0, hi = 0.0;
+                std::size_t n = 0;
                 for (const auto& o : obs) {
                     const double dx = o.lc - static_cast<double>(i);
                     const double dy = o.lr - static_cast<double>(j);
                     // Square window keeps the cost bounded and local; the ring of fallback
                     // matters where markers/header punch holes in the lattice.
                     if (std::fabs(dx) > rad || std::fabs(dy) > rad) continue;
-                    const double d2 = dx * dx + dy * dy;
-                    // Exact hit: use it alone rather than dividing by ~zero.
-                    if (d2 < 1e-9) {
-                        wsum = 1.0;
-                        vsum = o.value;
-                        exact = true;
-                        break;
-                    }
+                    // Floored so a pilot sitting exactly on the node gets a large but FINITE
+                    // weight. The old code special-cased the exact hit to avoid dividing by zero
+                    // and, as a side effect, reported residual 0 for that node however damaged its
+                    // neighbourhood was -- a false clean bill of health on the very nodes a pilot
+                    // lands on.
+                    const double d2 = std::max(dx * dx + dy * dy, kMinDistanceSq);
                     const double w = 1.0 / std::pow(d2, cfg.idw_power * 0.5);
-                    wsum += w;
-                    vsum += w * o.value;
+                    if (n == 0) { lo = hi = o.value; }
+                    else { lo = std::min(lo, o.value); hi = std::max(hi, o.value); }
+                    S += w;   Sx += w * dx;        Sy += w * dy;
+                    Sxx += w * dx * dx;  Sxy += w * dx * dy;  Syy += w * dy * dy;
+                    Sz += w * o.value;   Sxz += w * dx * o.value;  Syz += w * dy * o.value;
+                    ++n;
                 }
 
                 const std::size_t node = static_cast<std::size_t>(j) * f.lat_cols_ + i;
-                const double est = wsum > 0.0 ? vsum / wsum : fallback;
-                field[node] = est;
+                if (S <= 0.0) {
+                    field[node] = fallback;
+                    continue;
+                }
 
-                // Second pass for the residual. Skipped on an exact hit, where a single
-                // pilot defines the estimate and the spread is meaningless.
-                if (exact || wsum <= 0.0) continue;
+                // Weighted mean: the locally-constant estimate, and the fallback.
+                double a = Sz / S;
+                double b = 0.0;
+                double c = 0.0;
+
+                if (n >= kMinPlanePilots) {
+                    const double det = Det3(S, Sx, Sy, Sx, Sxx, Sxy, Sy, Sxy, Syy);
+                    // The Gram matrix of {1, dx, dy} is positive semi-definite, so its determinant
+                    // vanishes exactly when the pilots are collinear -- no plane is determined and
+                    // solving anyway would amplify noise into a steep bogus ramp. Compared against
+                    // the scale of the system so the test is dimensionally sound.
+                    const double ref = S * Sxx * Syy;
+                    if (ref > 0.0 && det > kMinConditioning * ref) {
+                        a = Det3(Sz, Sx, Sy, Sxz, Sxx, Sxy, Syz, Sxy, Syy) / det;
+                        b = Det3(S, Sz, Sy, Sx, Sxz, Sxy, Sy, Syz, Syy) / det;
+                        c = Det3(S, Sx, Sz, Sx, Sxx, Sxz, Sy, Sxy, Syz) / det;
+                        // Never extrapolate outside what was actually observed. At the frame edge
+                        // the window is one-sided, and an unclamped plane can shoot past every
+                        // pilot that informed it -- a confident reference nothing supports.
+                        if (a < lo || a > hi) {
+                            a = std::min(std::max(a, lo), hi);
+                            b = 0.0;
+                            c = 0.0;
+                        }
+                    }
+                }
+
+                field[node] = a;
+
+                // Second pass: spread of the pilots about the fitted surface.
                 double rw = 0.0;
                 double rv = 0.0;
                 for (const auto& o : obs) {
                     const double dx = o.lc - static_cast<double>(i);
                     const double dy = o.lr - static_cast<double>(j);
                     if (std::fabs(dx) > rad || std::fabs(dy) > rad) continue;
-                    const double d2 = dx * dx + dy * dy;
-                    if (d2 < 1e-9) continue;
+                    const double d2 = std::max(dx * dx + dy * dy, kMinDistanceSq);
                     const double w = 1.0 / std::pow(d2, cfg.idw_power * 0.5);
                     rw += w;
-                    rv += w * std::fabs(o.value - est);
+                    rv += w * std::fabs(o.value - (a + b * dx + c * dy));
                 }
                 if (rw > 0.0) {
                     // Both levels contribute to the same node residual; take the worst.

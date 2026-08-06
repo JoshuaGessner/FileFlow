@@ -110,9 +110,25 @@ inline constexpr double kMinBrightLevel = 60.0;   // nothing bright enough to be
 inline constexpr double kMaxDarkLevel = 140.0;    // the dark level has washed out
 
 struct AimConfig {
-    // Below this, no detector can work: the boundary ring is one cell wide, so at 3 px/cell the
-    // ring is 3 px and its own edges are indistinguishable from noise.
-    double min_px_per_cell = 4.0;
+    // The MEASURED density cliff, not the detector's theoretical floor.
+    //
+    // 4.0 was the floor below which no detector can work at all: the boundary ring is one cell
+    // wide, so at 3 px/cell the ring is 3 px and its own edges are indistinguishable from noise.
+    // That number is still true and it was the wrong threshold to aim by. Real hardware puts the
+    // cliff far above it (EXP-001, 2026-08-06):
+    //
+    //     7.30 px/cell -> local separation 142.0, 14 headers decoded
+    //     5.93 px/cell -> local separation   4.5,  0 headers decoded
+    //
+    // Between those two the link stops working entirely, so a floor of 4.0 returned "Ready" for
+    // framing that provably decodes nothing -- the guidance was passing setups the decoder cannot
+    // use. 7.5 sits just above the highest density known to fail, which is the most this evidence
+    // supports.
+    //
+    // Two captures, one device pair, one distance, no repeats: this is a WORKING FLOOR with one
+    // observation behind it, not a characterised limit, and EXP-001's registered threshold (locate
+    // the cliff within one sweep step) is still unmet. Revise it when the sweep runs.
+    double min_px_per_cell = 7.5;
     // Target for a comfortable margin on all four sides, as a fraction of the frame's short axis.
     double target_margin = 0.06;
     // Exposure guards. A frame with almost everything on one side of the threshold has no second

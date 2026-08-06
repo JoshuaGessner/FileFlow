@@ -277,12 +277,27 @@ class CaptureActivity : AppCompatActivity() {
             showReport("Capturing $frames frames at $fps fps (max width $maxWidth)…")
         }
 
+        // The viewfinder stays LIVE through the recording.
+        //
+        // The aiming phase tears its camera session down and this one opens a fresh one, and the
+        // preview used to stop dead at that handover: the operator lined the phones up, the picture
+        // froze, and it stayed frozen for the whole capture until the report replaced it. Holding
+        // two phones still for tens of seconds is exactly when someone needs to see that they are
+        // STILL lined up, and a frozen frame is worse than no preview at all -- it looks like a
+        // live one that is going well, so drift is invisible until the decode fails (F46).
+        val liveAnalyser = AimAnalyser()
+        val gc = intent.getIntExtra("gridCols", 120)
+        val gr = intent.getIntExtra("gridRows", 260)
+        var lastAimMs = 0L
+        var seen = 0
+
         // Off the main thread: the capture blocks, and a frozen UI thread would also stall the
         // callbacks it is waiting for.
         Thread {
             val dir = File(filesDir, BUNDLE_DIR)
             dir.deleteRecursively()
-            val outcome = CameraRecorder(this).record(
+            val rec = CameraRecorder(this)
+            val outcome = rec.record(
                 bundleDir = dir.absolutePath,
                 frameCount = frames,
                 targetFps = fps,
@@ -293,6 +308,33 @@ class CaptureActivity : AppCompatActivity() {
                 exposureNs = exposureNs,
                 iso = iso,
                 rig = rig,
+                onFrame = { buf, w, h, stride ->
+                    // Repainting is throttled inside the view, so this is a cheap call per frame.
+                    previewView?.submit(buf, w, h, stride, rec.sensorOrientation)
+                    seen++
+                    // Guidance as well, but far slower than the aiming phase used. The writer is
+                    // the binding constraint on this path -- 32 fps with writes on against 59 with
+                    // them off (F28) -- so analysis here competes directly with the thing being
+                    // measured. Twice a second is enough to notice drift and correct it, and cheap
+                    // enough not to change what the capture is measuring.
+                    val now = System.currentTimeMillis()
+                    if (now - lastAimMs >= RECORDING_AIM_INTERVAL_MS) {
+                        lastAimMs = now
+                        val aim = liveAnalyser.analyse(buf, w, h, stride, gc, gr)
+                        val n = seen
+                        runOnUiThread {
+                            aimView?.let { av ->
+                                if (aim != null) av.update(aim, w, h)
+                                previewView?.let { av.contentRect = it.contentRect() }
+                                av.setBanner(
+                                    if (aim != null && aim.verdict != AimVerdict.Ready) {
+                                        "Recording $n/$frames — ${aim.guidance}"
+                                    } else "Recording $n/$frames — hold steady"
+                                )
+                            }
+                        }
+                    }
+                },
             )
             val report = format(outcome, dir)
             runOnUiThread { showReport(report) }
@@ -357,6 +399,9 @@ class CaptureActivity : AppCompatActivity() {
                    } else "")
         appendLine("  EDGE_MODE        ${o.edgeMode}  (0 = OFF, requested; OQ-016)")
         appendLine("  NOISE_REDUCTION  ${o.noiseReductionMode}  (0 = OFF, requested; OQ-016)")
+        // Requested ON, unlike the two above: the lens's vignette is a smooth multiplicative field
+        // the receiver has to fight, and correcting it is the ISP doing something useful (RISK-025).
+        appendLine("  SHADING_MODE     ${o.shadingMode}  (2 = HIGH_QUALITY, requested; RISK-025)")
         appendLine()
 
         if (o.error != null) {
@@ -417,6 +462,8 @@ class CaptureActivity : AppCompatActivity() {
         const val FRAMES_CSV = "capture-frames.csv"
         private const val REQ_CAMERA = 1
         private const val AIM_INTERVAL_MS = 150L
+        /** Guidance cadence WHILE recording. Slower than aiming: see the note in [start]. */
+        private const val RECORDING_AIM_INTERVAL_MS = 500L
         /** Consecutive Ready verdicts before recording starts. See the note in [startAiming]. */
         private const val READY_STREAK = 6
     }

@@ -121,6 +121,8 @@ class CameraRecorder(private val context: Context) {
         val reportedFrameDurationNs: Long,
         val edgeMode: Int,
         val noiseReductionMode: Int,
+        /** `SHADING_MODE` as reported back, not as requested. -1 = the device said nothing. */
+        val shadingMode: Int,
         val manualRequested: Boolean,
         val error: String?,
         /**
@@ -290,6 +292,7 @@ class CameraRecorder(private val context: Context) {
         var aeMode = -1
         var reportedFrameDuration = -1L
         var edgeMode = -1
+        var shadingMode = -1
         var nrMode = -1
         var manualRequested = false
         var error: String? = null
@@ -400,6 +403,21 @@ class CameraRecorder(private val context: Context) {
                 // request is honoured is read back below, not assumed.
                 set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF)
                 set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF)
+                // Lens shading correction ON -- the one piece of ISP processing this pipeline wants.
+                //
+                // Edge enhancement and noise reduction are switched off above because they invent
+                // structure at the spatial frequency the cells occupy. Shading correction is the
+                // opposite kind of operation: it removes a smooth multiplicative field the LENS
+                // added, and that field is pure interference here. It was never requested, so the
+                // vignette went uncorrected, and RISK-025 called the consequence in advance --
+                // "vignetting, worsens at closer range (exactly where we want density), and is not
+                // corrected".
+                //
+                // Measured on the first above-cliff capture: bright nonuniformity 6.51x across the
+                // frame, 26% of lattice nodes below the separation floor, and mean pilot residual
+                // 32.3 against a budget of 16.6. Getting closer to clear the density cliff made it
+                // worse, because vignetting is strongest exactly where the framing is tightest.
+                set(CaptureRequest.SHADING_MODE, CameraMetadata.SHADING_MODE_HIGH_QUALITY)
 
                 if (chars.hasCapability(
                         CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR,
@@ -482,6 +500,7 @@ class CameraRecorder(private val context: Context) {
                             reportedFrameDuration = it
                         }
                         result.get(CaptureResult.EDGE_MODE)?.let { edgeMode = it }
+                        result.get(CaptureResult.SHADING_MODE)?.let { shadingMode = it }
                         result.get(CaptureResult.NOISE_REDUCTION_MODE)?.let { nrMode = it }
                     }
                 },
@@ -533,6 +552,7 @@ class CameraRecorder(private val context: Context) {
                 reportedFrameDurationNs = reportedFrameDuration,
                 edgeMode = edgeMode,
                 noiseReductionMode = nrMode,
+                shadingMode = shadingMode,
                 manualRequested = manualRequested,
                 error = error,
             )
@@ -676,7 +696,8 @@ class CameraRecorder(private val context: Context) {
         duplicateFrames = 0, timestampsNs = LongArray(0), reportedExposureNs = -1,
         reportedIso = -1, reportedFocusDistance = -1f, minFocusDiopters = -1f, aeMode = -1,
         reportedFrameDurationNs = -1L, edgeMode = -1,
-        noiseReductionMode = -1, manualRequested = false, error = why, framesWereWritten = true,
+        noiseReductionMode = -1, shadingMode = -1,
+        manualRequested = false, error = why, framesWereWritten = true,
     )
 
     companion object {

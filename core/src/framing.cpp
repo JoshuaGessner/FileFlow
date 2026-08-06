@@ -263,9 +263,17 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
         return a;
     }
 
+    // Density is the last measured thing standing between this rig and a payload, so the guidance
+    // is specific about the target rather than just the direction. "Move closer" was acted on and
+    // still landed below the cliff, because a cell is not a unit anyone can see.
     if (a.px_per_cell < cfg.min_px_per_cell) {
         a.verdict = AimVerdict::kTooFar;
-        a.guidance = "Move closer — the screen is too small in the view to read.";
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+                      "Move closer — %.1f pixels per cell, need %.1f. The sender's screen should "
+                      "nearly fill the view.",
+                      a.px_per_cell, cfg.min_px_per_cell);
+        a.guidance = buf;
         return a;
     }
 

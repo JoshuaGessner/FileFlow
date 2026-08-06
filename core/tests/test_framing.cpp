@@ -147,14 +147,15 @@ TEST(AimAnalysis, DoesNotTellAUserToStopRotating) {
     // Measured: roll is tolerated to at least 40 degrees with header success 1.0000 and zero
     // detection failures (F32). So rotation on its own is NOT a problem, and advice that treats it
     // as one would send a user chasing an alignment that costs them nothing.
-    // Big enough to resolve (1560 px over 260 rows = 6 px/cell) and carrying real cells, so the
-    // only unusual thing about it is the 30 degrees.
-    Image8 img = Screen(2400, 2400, 1200, 1200, 1560, 30.0, 6);
+    // Big enough to resolve (1950 px over 260 rows = 7.5 px/cell, the measured floor) and
+    // carrying real cells, so the only unusual thing about it is the 30 degrees. At 30 degrees the
+    // bounding box is about 2139x1754, which still sits inside the frame with room to spare.
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 30.0, 6);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     EXPECT_NEAR(r.value().rotation_deg, 30.0, 5.0);
     EXPECT_NE(r.value().verdict, AimVerdict::kClipped);
-    EXPECT_GT(r.value().px_per_cell, 4.0);
+    EXPECT_GT(r.value().px_per_cell, 7.5);
     // Fully visible and resolvable while rotated: nothing to complain about.
     EXPECT_EQ(r.value().verdict, AimVerdict::kReady) << r.value().guidance;
 }
@@ -197,7 +198,7 @@ TEST(AimAnalysis, DetectsOverexposure) {
     // Real overexposure: the dark cells lift toward the bright ones until no threshold separates
     // them. Measured on the first two-device capture as 66% bright against 9% dark with the
     // photometric field unable to place a reference (F33).
-    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 250, 205);
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6, 250, 205);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     EXPECT_EQ(r.value().verdict, AimVerdict::kTooBright) << r.value().guidance;
@@ -215,17 +216,17 @@ TEST(AimAnalysis, AMostlyDarkPayloadIsNotAnAimingFault) {
     // guidance and sent the operator looking for a fault that was not there (F39).
     //
     // 8% of cells lit, with both levels healthy and far apart.
-    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 230, 12, 0.08);
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6, 230, 12, 0.08);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     EXPECT_NE(r.value().verdict, AimVerdict::kTooDark)
         << "a sparse payload is not a dark screen: " << r.value().guidance;
-    EXPECT_GT(r.value().px_per_cell, 4.0);
+    EXPECT_GT(r.value().px_per_cell, 7.5);
 }
 
 TEST(AimAnalysis, AMostlyBrightPayloadIsNotOverexposure) {
     // The same rule from the other side. 92% of cells lit, levels still far apart.
-    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6, 230, 12, 0.92);
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6, 230, 12, 0.92);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     EXPECT_NE(r.value().verdict, AimVerdict::kTooBright)
@@ -233,13 +234,13 @@ TEST(AimAnalysis, AMostlyBrightPayloadIsNotOverexposure) {
 }
 
 TEST(AimAnalysis, AcceptsAWellFramedSharpScreen) {
-    Image8 img = Screen(1600, 1600, 800, 800, 1200, 0.0, 6);
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6);
     auto r = AnalyseAim(img.view(), kGrid);
     ASSERT_TRUE(r.ok());
     const AimAdvice& a = r.value();
     EXPECT_EQ(a.verdict, AimVerdict::kReady) << a.guidance;
     EXPECT_FALSE(a.clipped());
-    EXPECT_GT(a.px_per_cell, 4.0);
+    EXPECT_GT(a.px_per_cell, 7.5);
     EXPECT_LT(a.mid_fraction, 0.45);
 }
 

@@ -67,7 +67,10 @@ class PhotometricField {
 
     [[nodiscard]] PhotometricRef RefAt(std::uint32_t col, std::uint32_t row) const noexcept;
 
-    // Local pilot-fit residual, in luminance units. High means "the pilots here do not
+    // Local pilot-fit residual, in luminance units, measured about a locally fitted PLANE rather
+    // than a locally constant level -- so a smooth brightness gradient across the frame is absorbed
+    // by the fit instead of being reported as damage (F45).
+    // High means "the pilots here do not
     // agree with each other" -- occlusion, glare or a tracking error. Exposed so the
     // adaptive link controller and telemetry can see WHY cells were erased.
     [[nodiscard]] double ResidualAt(std::uint32_t col, std::uint32_t row) const noexcept;
