@@ -595,10 +595,29 @@ class CameraRecorder(private val context: Context) {
         // So among equal-scoring modes, take the smallest area. That is not a cosmetic preference:
         // write throughput is the harness's binding constraint (F28), and the discarded pixels
         // contribute nothing to px/cell by construction.
+        // Among equal-scoring modes, prefer a STANDARD aspect ratio.
+        //
+        // "Smallest area" was the previous tie-break and it selected 1920x960 -- a 2:1 crop, which
+        // is not a shape sensors normally deliver. Unusual crops are where non-square pixels and
+        // anamorphic squeezes live, and the operator reported the preview still stretched
+        // vertically after the orientation was confirmed correct. 4:3 and 16:9 are the shapes a
+        // sensor is actually read out in, so they are the safe ones to trust geometrically.
+        //
+        // Area still breaks any remaining tie, because write throughput is the harness's binding
+        // constraint (F28) and the extra pixels add no resolvable density.
+        val standard = doubleArrayOf(4.0 / 3.0, 16.0 / 9.0, 3.0 / 2.0)
+        fun aspectPenalty(s: Size): Double {
+            val a = maxOf(s.width, s.height).toDouble() / minOf(s.width, s.height)
+            return standard.minOf { kotlin.math.abs(a - it) / it }
+        }
         val best = candidates.maxOfOrNull { score(it) } ?: return null
         return candidates
             .filter { score(it) >= best - 1e-6 }
-            .minByOrNull { it.width.toLong() * it.height }
+            .sortedWith(
+                compareBy({ if (aspectPenalty(it) <= 0.02) 0 else 1 },
+                          { it.width.toLong() * it.height }),
+            )
+            .firstOrNull()
     }
 
     private fun openCamera(mgr: CameraManager, id: String, handler: Handler): CameraDevice? {
