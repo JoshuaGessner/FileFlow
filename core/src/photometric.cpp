@@ -221,6 +221,20 @@ std::vector<double> PhotometricField::Normalise(std::span<const double> samples)
     return out;
 }
 
+double PhotometricField::mean_residual() const noexcept {
+    if (residual_.empty()) return 0.0;
+    double s = 0.0;
+    for (const double r : residual_) s += r;
+    return s / static_cast<double>(residual_.size());
+}
+
+double PhotometricField::mean_separation() const noexcept {
+    if (bright_.empty() || bright_.size() != dark_.size()) return 0.0;
+    double s = 0.0;
+    for (std::size_t i = 0; i < bright_.size(); ++i) s += bright_[i] - dark_[i];
+    return s / static_cast<double>(bright_.size());
+}
+
 double PhotometricField::bright_nonuniformity() const noexcept {
     if (bright_.empty()) return 1.0;
     double lo = bright_[0];

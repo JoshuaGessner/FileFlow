@@ -189,6 +189,48 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Refuse impairments the chosen path cannot apply, rather than accepting and ignoring them.
+    //
+    // The cell-sample path and the image path have DIFFERENT impairment sets: `--occlusion`,
+    // `--crosstalk`, `--gamma` and friends are applied by `sim::Channel`, which only runs when
+    // `--image-path` is off. Setting one alongside `--image-path` used to be accepted in silence,
+    // so a sweep could vary a knob that did nothing and report the resulting flat response as a
+    // finding. That is the same silent-no-op failure as F31's fractional pitch and F33's clipped
+    // screen: the run looks healthy and the conclusion is wrong.
+    if (o.image_path) {
+        struct Ignored { const char* flag; double value; };
+        const Ignored ignored[] = {
+            {"--occlusion", o.channel.occlusion_fraction},
+            {"--crosstalk", o.channel.crosstalk},
+            {"--vignetting", o.channel.vignetting},
+            {"--glare", o.channel.glare_strength},
+            {"--shot", o.channel.shot_noise_scale},
+        };
+        bool bad = false;
+        for (const auto& i : ignored) {
+            if (i.value > 0.0) {
+                std::fprintf(stderr,
+                             "%s is a CELL-PATH impairment and does nothing with --image-path.\n",
+                             i.flag);
+                bad = true;
+            }
+        }
+        if (o.channel.gamma != 1.0) {
+            std::fprintf(stderr, "--gamma is a CELL-PATH impairment and does nothing with "
+                                 "--image-path.\n");
+            bad = true;
+        }
+        if (bad) {
+            std::fprintf(stderr,
+                         "\nThe image path renders real pixels, so its impairments are optical:\n"
+                         "  --blur, --img-noise, --falloff, --img-glare, and the view geometry\n"
+                         "  (--distance, --yaw, --pitch, --roll). Refusing rather than ignoring,\n"
+                         "  because a knob that silently does nothing produces a flat response\n"
+                         "  curve that looks like a finding.\n");
+            return 2;
+        }
+    }
+
     // Deterministic payload from a fixed seed: reproducible without storing the file.
     std::vector<std::uint8_t> payload(o.payload_bytes);
     SplitMix64 prng(0xF11EF10ULL ^ o.channel.seed);

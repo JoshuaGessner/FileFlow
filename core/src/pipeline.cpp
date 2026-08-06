@@ -55,7 +55,15 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         return out;
     }
 
-    out.cell_samples = field.value().Normalise(raw);
+    const PhotometricField& pf = field.value();
+    ++diag_.photometric_frames;
+    diag_.sum_bright_pilots += static_cast<double>(pf.bright_pilots_used());
+    diag_.sum_dark_pilots += static_cast<double>(pf.dark_pilots_used());
+    diag_.sum_separation += pf.mean_separation();
+    diag_.sum_residual += pf.mean_residual();
+    diag_.sum_bright_nonuniformity += pf.bright_nonuniformity();
+
+    out.cell_samples = pf.Normalise(raw);
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here
     last_ok_ = true;
     ++diag_.frames_decoded;

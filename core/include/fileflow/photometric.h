@@ -88,6 +88,18 @@ class PhotometricField {
     // markedly above 1 is the signature RISK-025 predicts for the S26 Ultra.
     [[nodiscard]] double bright_nonuniformity() const noexcept;
 
+    // Mean pilot-fit residual over the lattice, in luminance units, and the mean local
+    // separation. Together these say WHICH of the two erasure mechanisms is firing when a frame
+    // comes back almost entirely erased -- and they are different problems with different fixes.
+    //
+    // Low separation means the two levels are not far enough apart to threshold: blur, defocus, or
+    // an exposure that has crushed one level. High residual means the pilots disagree with their own
+    // fitted field: occlusion, glare, or a tracking error that has shifted the sampling grid off the
+    // cells (F8). Without both numbers a 0.9 erasure rate is a dead end, which is exactly where the
+    // first real capture left us.
+    [[nodiscard]] double mean_residual() const noexcept;
+    [[nodiscard]] double mean_separation() const noexcept;
+
   private:
     PhotometricField() = default;
 

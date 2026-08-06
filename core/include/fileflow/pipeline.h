@@ -49,6 +49,37 @@ struct PipelineDiagnostics {
     [[nodiscard]] std::uint64_t failures() const noexcept {
         return geometry_failures + photometric_failures;
     }
+
+    // Photometric telemetry, summed over frames that reached the photometry stage.
+    //
+    // Kept here rather than left to the caller because a frame that localises and then erases
+    // almost every cell is the hardest failure to attribute, and the numbers that attribute it are
+    // discarded the moment the field goes out of scope. F21 is the same lesson from the FEC layer:
+    // telemetry that exists only on the success path is missing where it matters.
+    std::uint64_t photometric_frames = 0;
+    double sum_bright_pilots = 0.0;
+    double sum_dark_pilots = 0.0;
+    double sum_separation = 0.0;
+    double sum_residual = 0.0;
+    double sum_bright_nonuniformity = 0.0;
+
+    [[nodiscard]] double mean_bright_pilots() const noexcept {
+        return photometric_frames ? sum_bright_pilots / static_cast<double>(photometric_frames) : 0.0;
+    }
+    [[nodiscard]] double mean_dark_pilots() const noexcept {
+        return photometric_frames ? sum_dark_pilots / static_cast<double>(photometric_frames) : 0.0;
+    }
+    [[nodiscard]] double mean_separation() const noexcept {
+        return photometric_frames ? sum_separation / static_cast<double>(photometric_frames) : 0.0;
+    }
+    [[nodiscard]] double mean_residual() const noexcept {
+        return photometric_frames ? sum_residual / static_cast<double>(photometric_frames) : 0.0;
+    }
+    [[nodiscard]] double mean_bright_nonuniformity() const noexcept {
+        return photometric_frames
+                   ? sum_bright_nonuniformity / static_cast<double>(photometric_frames)
+                   : 0.0;
+    }
 };
 
 class FramePipeline {

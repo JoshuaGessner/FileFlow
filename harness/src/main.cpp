@@ -140,10 +140,41 @@ int main(int argc, char** argv) {
                     : 0.0;
     std::printf("geometry pixels/frame    %.0f\n", px_per_frame);
     const std::uint64_t total_cells = usable_cells + erased_cells;
-    std::printf("cell erasure rate        %.4f\n",
-                total_cells ? static_cast<double>(erased_cells) /
-                                  static_cast<double>(total_cells)
-                            : 0.0);
+    const double erasure = total_cells ? static_cast<double>(erased_cells) /
+                                             static_cast<double>(total_cells)
+                                       : 0.0;
+    std::printf("cell erasure rate        %.4f\n", erasure);
+
+    // Photometric detail, printed whenever anything reached the photometry stage. A high erasure
+    // rate has two entirely different causes and they need opposite fixes, so the rate alone is not
+    // actionable -- which is where the first real capture stalled.
+    if (d.photometric_frames > 0) {
+        std::printf("\n--- photometry (why cells were erased) ---\n");
+        std::printf("frames with a field      %llu\n",
+                    static_cast<unsigned long long>(d.photometric_frames));
+        std::printf("pilots used / frame      %.0f bright, %.0f dark\n",
+                    d.mean_bright_pilots(), d.mean_dark_pilots());
+        std::printf("mean local separation    %.1f  (erased below %.1f)\n",
+                    d.mean_separation(), cfg.photometric.min_separation);
+        std::printf("mean pilot residual      %.1f  (erased above %.2f x separation = %.1f)\n",
+                    d.mean_residual(), cfg.photometric.max_pilot_residual_ratio,
+                    d.mean_separation() * cfg.photometric.max_pilot_residual_ratio);
+        std::printf("bright nonuniformity     %.2f  (1.0 = flat; RISK-025 predicts >1)\n",
+                    d.mean_bright_nonuniformity());
+        if (erasure > 0.5) {
+            std::printf("\n  READING THIS: a high erasure rate is two different problems.\n");
+            if (d.mean_separation() < cfg.photometric.min_separation * 2.0) {
+                std::printf("  * SEPARATION is low. The two levels are not far enough apart to\n");
+                std::printf("    threshold -- defocus, or an exposure that crushed one level.\n");
+            }
+            if (d.mean_residual() >
+                d.mean_separation() * cfg.photometric.max_pilot_residual_ratio) {
+                std::printf("  * RESIDUAL exceeds its budget. Pilots disagree with their own\n");
+                std::printf("    fitted field: occlusion, glare, or a sampling grid sitting off\n");
+                std::printf("    the cells because the homography is slightly wrong (F8).\n");
+            }
+        }
+    }
 
     // Deliberately NOT reported: goodput. That needs a full transfer with a verified hash, and
     // this tool decodes frames to cell samples. Printing a rate here would invite exactly the
