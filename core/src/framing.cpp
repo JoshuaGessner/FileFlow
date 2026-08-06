@@ -159,6 +159,7 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
 
     AimAdvice a;
     a.threshold = split.threshold;
+    a.level_separation = split.bright_mean - split.dark_mean;
     a.mean_luminance = sampled > 0 ? sum_lum / static_cast<double>(sampled) : 0.0;
 
     // A frame with no two-level structure at all has no screen in it, whatever its brightness.

@@ -69,7 +69,14 @@ class TransmitActivity : AppCompatActivity() {
         val divisor = intent.getIntExtra("divisor", 1).coerceAtLeast(1)
         val seconds = intent.getIntExtra("seconds", 20)
         val nsym = intent.getIntExtra("nsym", 32)
-        val payload = intent.getIntExtra("payload", 128 * 1024)
+        // 0 = fill the block exactly.
+        //
+        // A payload that does not fill its block leaves the trailing source symbols ZERO, and a zero
+        // symbol renders as an almost-black frame -- visible to the eye as the transmitter
+        // flickering, and to the receiver as bursts of frames at a fifth of the usual luminance
+        // (F39). The fill path existed but every caller passed an explicit size, so it was never
+        // reached and the flicker survived the fix.
+        val payload = intent.getIntExtra("payload", 0)
         // Black border in panel pixels. Default is generous rather than zero: a full-bleed frame has
         // its corners clipped by the display glass, which breaks localisation while everything else
         // looks fine (F34). Set 0 deliberately to reproduce that.

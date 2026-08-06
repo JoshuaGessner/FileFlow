@@ -44,6 +44,8 @@ class CaptureActivity : AppCompatActivity() {
     private lateinit var text: TextView
     private var aimView: AimView? = null
     private var aimPreviewFrame: dev.fileflow.aim.AspectFrameLayout? = null
+    /** Focus the aim phase settled on; carried into the recording so it stops hunting. */
+    private var lockedFocus: Float = -1f
     private var aimRecorder: CameraRecorder? = null
     private var aimThread: Thread? = null
 
@@ -194,6 +196,11 @@ class CaptureActivity : AppCompatActivity() {
                                     } else "Lining up — recording starts when this is steady"
                                 )
                             }
+                            // Freeze the focus the aiming phase converged on, so the recording
+                            // does not keep hunting and change the blur mid-dataset.
+                            if (readyStreak >= READY_STREAK && lockedFocus < 0f) {
+                                lockedFocus = rec.lastFocusDiopters
+                            }
                             if (readyStreak >= READY_STREAK) {
                                 handedOver = true
                                 rec.cancel()
@@ -238,7 +245,12 @@ class CaptureActivity : AppCompatActivity() {
         val writeFrames = intent.getBooleanExtra("write", true)
         // Negative = continuous autofocus, which is the right default because it needs no knowledge
         // of the rig. Positive = reciprocal metres, locked (5.0 = 20 cm).
-        val focusDiopters = intent.getFloatExtra("focusDiopters", -1f)
+        // An explicit value wins; otherwise use whatever the aiming phase converged on, and only
+        // fall back to continuous autofocus if aiming never ran. Locking matters because AF that
+        // keeps hunting during a capture changes the optical blur mid-dataset, so frames seconds
+        // apart stop being comparable -- and comparability is the entire point of a recorded bundle.
+        val requestedFocus = intent.getFloatExtra("focusDiopters", -1f)
+        val focusDiopters = if (requestedFocus >= 0f) requestedFocus else lockedFocus
         // 0 = derive from the frame period. Exposed so EXP-004/EXP-005 can sweep one axis at a time.
         val exposureNs = intent.getLongExtra("exposureNs", 0L)
         val iso = intent.getIntExtra("iso", CameraRecorder.DEFAULT_ISO)

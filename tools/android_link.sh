@@ -44,7 +44,9 @@ AIM="${12:-true}"
 NOTES="${NOTES//\'/}"
 
 NSYM=32
-PAYLOAD=131072
+# 0 = fill the fountain block exactly, leaving no zero-padded symbols to render as near-black
+# frames (F39). Set a specific size only when the payload size itself is the variable under test.
+PAYLOAD=0
 SEED=5
 TX_SECONDS=$((FRAMES / 10 + 40))
 

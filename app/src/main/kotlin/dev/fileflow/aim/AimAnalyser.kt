@@ -34,6 +34,14 @@ data class Aim(
     val midFraction: Double,
     val meanLuminance: Double,
     val threshold: Int,
+    /**
+     * Distance between the two luminance levels. THE focus metric.
+     *
+     * Mid-fraction is not one: it counts pixels between the levels, which only means "sharp" when
+     * two levels exist. Bad enough focus collapses them, everything lands in one class, and
+     * mid-fraction falls to zero — so the blurriest frame scores best (F40).
+     */
+    val levelSeparation: Double,
 ) {
     val clipped: Boolean get() = clippedLeft || clippedTop || clippedRight || clippedBottom
     val ready: Boolean get() = verdict == AimVerdict.Ready
@@ -79,6 +87,7 @@ class AimAnalyser {
             midFraction = slots[Slot.MidFraction.ordinal],
             meanLuminance = slots[Slot.MeanLuminance.ordinal],
             threshold = slots[Slot.Threshold.ordinal].toInt(),
+            levelSeparation = slots[Slot.LevelSeparation.ordinal],
         )
     }
 
@@ -87,6 +96,7 @@ class AimAnalyser {
         Verdict, LitFraction, BboxX, BboxY, BboxW, BboxH,
         ClippedLeft, ClippedTop, ClippedRight, ClippedBottom,
         RotationDeg, PxPerCell, BboxInflation, MidFraction, MeanLuminance, Threshold,
+        LevelSeparation,
     }
 }
 

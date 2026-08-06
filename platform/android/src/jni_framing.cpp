@@ -44,6 +44,7 @@ enum Slot : int {
     kMidFraction,
     kMeanLuminance,
     kThreshold,
+    kLevelSeparation,
     kSlotCount,
 };
 
@@ -108,6 +109,7 @@ Java_dev_fileflow_aim_NativeAim_analyse(JNIEnv* env, jclass /*unused*/, jobject 
     v[kMidFraction] = a.mid_fraction;
     v[kMeanLuminance] = a.mean_luminance;
     v[kThreshold] = static_cast<jdouble>(a.threshold);
+    v[kLevelSeparation] = a.level_separation;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
 
     return env->NewStringUTF(a.guidance.c_str());

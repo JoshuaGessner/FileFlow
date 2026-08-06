@@ -78,6 +78,17 @@ struct AimAdvice {
     /** Share of interior pixels at the bright level. Diagnostic only — payload-dependent (F39). */
     double bright_fraction = 0.0;
 
+    /**
+     * Distance between the two luminance levels, in sensor counts.
+     *
+     * THE focus metric, and the one to sweep against. Mid-fraction is not: it measures how many
+     * pixels sit between the levels, which only means "sharp" when two levels actually exist. Where
+     * focus is bad enough to collapse them, almost everything lands in one class and mid-fraction
+     * goes to zero — so a badly defocused frame scores as the sharpest one. A focus sweep judged on
+     * mid-fraction duly picked 40 cm for a subject at 20 cm (F40).
+     */
+    double level_separation = 0.0;
+
     // One imperative sentence for a user, naming the ACTION rather than the measurement.
     std::string guidance;
 

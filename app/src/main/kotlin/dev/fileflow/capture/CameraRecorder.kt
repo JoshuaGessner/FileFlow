@@ -56,6 +56,18 @@ class CameraRecorder(private val context: Context) {
         private set
 
     /**
+     * Focus distance most recently REPORTED by the camera, in reciprocal metres.
+     *
+     * Continuous autofocus is right while aiming, because the rig is being moved and the distance is
+     * unknown. It is wrong while recording: AF keeps hunting, and every refocus changes the optical
+     * blur mid-dataset, so frames captured seconds apart are not comparable. Reading the converged
+     * value here lets the recording phase LOCK to it.
+     */
+    @Volatile
+    var lastFocusDiopters: Float = -1f
+        private set
+
+    /**
      * Set to stop an unbounded run. Checked on the camera callback thread.
      *
      * `@Volatile` rather than a lock: it is written from the UI thread and read from the camera
@@ -461,7 +473,10 @@ class CameraRecorder(private val context: Context) {
                         // way to know is to compare the result against the request.
                         result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { reportedExposure = it }
                         result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { reportedIso = it }
-                        result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { reportedFocus = it }
+                        result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let {
+                            reportedFocus = it
+                            lastFocusDiopters = it
+                        }
                         result.get(CaptureResult.CONTROL_AE_MODE)?.let { aeMode = it }
                         result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let {
                             reportedFrameDuration = it

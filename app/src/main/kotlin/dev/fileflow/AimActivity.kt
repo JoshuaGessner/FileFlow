@@ -155,7 +155,17 @@ class AimActivity : AppCompatActivity() {
             // meant to be advising about.
             var lastAnalysisMs = 0L
             var lastVerdict: AimVerdict? = null
+            // A focus override, so focus can be SWEPT against the metric that actually matters.
+            //
+            // The camera's own autofocus optimises contrast for a general scene. What decides
+            // whether this channel works is the separation between the two luminance levels, and
+            // those are not the same objective: AF converged on a value that looked plausible and
+            // gave a level separation of 5.1 against a threshold of 12, i.e. unreadable. Sweeping
+            // this and watching the reported separation finds the focus this task wants rather than
+            // the one a photograph wants.
+            val focusOverride = intent.getFloatExtra("focusDiopters", -1f)
             val outcome = rec.record(
+                focusDiopters = focusOverride,
                 previewSurface = previewSurface,
                 bundleDir = "${filesDir.absolutePath}/aim-discard",
                 frameCount = 0,                 // unbounded: runs until the activity stops it
@@ -187,11 +197,17 @@ class AimActivity : AppCompatActivity() {
                                 lastVerdict = aim.verdict
                                 Log.i(
                                     TAG,
-                                    "%s | px/cell %.1f rot %.0f lit %.3f mid %.2f mean %.0f | %s"
+                                    // Parenthesised. Without them `.format` binds to the SECOND
+                                    // literal alone, so the arguments line up against "sep %.0f |
+                                    // %s" and the verdict is handed to a float specifier -- which
+                                    // threw IllegalFormatConversionException on the camera thread
+                                    // and killed the app on every launch.
+                                    ("%s | px/cell %.1f rot %.0f lit %.3f mid %.2f mean %.0f " +
+                                     "sep %.0f | %s")
                                         .format(
                                             aim.verdict, aim.pxPerCell, aim.rotationDeg,
                                             aim.litFraction, aim.midFraction, aim.meanLuminance,
-                                            aim.guidance,
+                                            aim.levelSeparation, aim.guidance,
                                         ),
                                 )
                             }
